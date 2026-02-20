@@ -1,0 +1,12 @@
+.{
+    .name = .kaisha,
+    .version = "0.1.0",
+    .fingerprint = 0xf0abde267fe6e59c,
+    .minimum_zig_version = "0.15.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "vendor",
+    },
+}
