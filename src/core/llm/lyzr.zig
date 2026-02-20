@@ -45,6 +45,16 @@ fn parseSSE(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {
         }
     }
 
-    // Dupe the message so it outlives the parsed JSON
-    return allocator.dupe(u8, json_buf.items);
+    // Wrap in quotes so JSON parser can unescape: \n → newline, \t → tab, etc.
+    var json_str = std.ArrayListUnmanaged(u8).empty;
+    defer json_str.deinit(allocator);
+    try json_str.append(allocator, '"');
+    try json_str.appendSlice(allocator, json_buf.items);
+    try json_str.append(allocator, '"');
+
+    const parsed = std.json.parseFromSlice([]const u8, allocator, json_str.items, .{}) catch
+        return allocator.dupe(u8, json_buf.items);
+
+    defer parsed.deinit();
+    return allocator.dupe(u8, parsed.value);
 }

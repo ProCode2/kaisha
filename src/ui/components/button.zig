@@ -25,10 +25,10 @@ pub fn draw(self: Button, theme: Theme) bool {
     c.DrawRectangleRoundedLines(self.rect, 0.3, 8, theme.user_color);
 
     // label — centered in the rect
-    const text_w = c.MeasureText(self.label, theme.font_body);
-    const text_x: c_int = @intFromFloat(self.rect.x + (self.rect.width - @as(f32, @floatFromInt(text_w))) / 2.0);
-    const text_y: c_int = @intFromFloat(self.rect.y + (self.rect.height - @as(f32, @floatFromInt(theme.font_body))) / 2.0);
-    c.DrawText(self.label, text_x, text_y, theme.font_body, theme.text_primary);
+    const measured = c.MeasureTextEx(theme.font, self.label, theme.font_body, theme.spacing);
+    const text_x = self.rect.x + (self.rect.width - measured.x) / 2.0;
+    const text_y = self.rect.y + (self.rect.height - measured.y) / 2.0;
+    c.DrawTextEx(theme.font, self.label, .{ .x = text_x, .y = text_y }, theme.font_body, theme.spacing, theme.text_primary);
 
     return pressed;
 }

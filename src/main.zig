@@ -13,7 +13,8 @@ pub fn main() void {
     c.SetWindowMinSize(640, 480);
     c.SetTargetFPS(60);
 
-    const theme: Theme = .{};
+    var theme = Theme.init();
+    defer theme.deinit();
 
     // initialize screens
     var chat = ChatScreen.init(g_allocator);

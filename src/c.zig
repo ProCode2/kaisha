@@ -6,3 +6,7 @@ pub const c = @cImport({
 pub const curl = @cImport({
     @cInclude("curl/curl.h");
 });
+
+pub const md = @cImport({
+    @cInclude("md4c.h");
+});

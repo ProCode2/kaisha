@@ -55,6 +55,10 @@ pub fn build(b: *std.Build) void {
         .file = b.path("vendor/raygui_impl.c"),
         .flags = &.{},
     });
+    exe.root_module.addCSourceFile(.{
+        .file = b.path("vendor/md4c.c"),
+        .flags = &.{},
+    });
 
     // libcurl for HTTP requests (LLM API calls)
     exe.root_module.addIncludePath(.{ .cwd_relative = "/opt/homebrew/opt/curl/include" });

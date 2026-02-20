@@ -50,8 +50,8 @@ pub fn draw(self: *ChatScreen, theme: Theme) void {
     const h = c.GetScreenHeight();
 
     // headers
-    c.DrawText("Kaisha", 10, 10, theme.font_h1, theme.text_primary);
-    c.DrawText("How may I help you today?", 10, 30, theme.font_h2, theme.text_secondary);
+    c.DrawTextEx(theme.font, "Kaisha", .{ .x = 10, .y = 10 }, theme.font_h1, theme.spacing, theme.text_primary);
+    c.DrawTextEx(theme.font, "How may I help you today?", .{ .x = 10, .y = 35 }, theme.font_h2, theme.spacing, theme.text_secondary);
 
     // clipped chat area
     self.scroll.width = w;
@@ -59,7 +59,7 @@ pub fn draw(self: *ChatScreen, theme: Theme) void {
     const scroll_y = self.scroll.begin();
     var msg_y: c_int = 60 + scroll_y;
     for (self.messages.items) |msg| {
-        msg_y += ChatBubble.draw(msg, msg_y, w - 40, theme);
+        msg_y += ChatBubble.draw(self.allocator, msg, msg_y, w - 40, theme);
     }
     self.scroll.end(msg_y - scroll_y - 60);
 
