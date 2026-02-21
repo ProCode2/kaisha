@@ -13,7 +13,7 @@ pub fn draw(allocator: std.mem.Allocator, msg: message.Message, y: c_int, max_wi
 
     const renderer = MdRenderer{
         .allocator = allocator,
-        .txt = msg.text,
+        .txt = msg.content,
         .x = 10,
         .y = y,
         .font_size = theme.font_body,

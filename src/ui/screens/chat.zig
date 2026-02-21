@@ -7,6 +7,7 @@ const ChatBubble = @import("../components/chat_bubble.zig");
 const ScrollArea = @import("../components/scroll_area.zig");
 const Message = @import("../../core/message.zig").Message;
 const LyzrProvider = @import("../../core/llm/lyzr.zig");
+const Storage = @import("../../core/storage/storage.zig");
 
 const ChatScreen = @This();
 
@@ -23,6 +24,11 @@ pub fn init(allocator: std.mem.Allocator) ChatScreen {
         std.process.exit(1);
     };
     defer allocator.free(api_key);
+
+    const storage = Storage.init(allocator) orelse {
+        std.process.exit(1);
+    };
+
     return ChatScreen{
         .allocator = allocator,
         .input = TextInput{
@@ -31,18 +37,20 @@ pub fn init(allocator: std.mem.Allocator) ChatScreen {
         },
         .llm = LyzrProvider{
             .api_key = allocator.dupe(u8, api_key) catch std.process.exit(1),
-            .agent_id = "6960d9db5e0239738a837720",
+            .agent_id = "697b745c74a8b3af77251166",
             .user_id = "pradipta@lyzr.ai",
             .session_id = "6998513b3c9685c27823bbde-9w5zzmnazx",
+            .storage = storage,
         },
     };
 }
 
 pub fn deinit(self: *ChatScreen) void {
     for (self.messages.items) |msg| {
-        self.allocator.free(msg.text);
+        self.allocator.free(msg.content);
     }
     self.messages.deinit(self.allocator);
+    self.llm.storage.deinit();
 }
 
 pub fn draw(self: *ChatScreen, theme: Theme) void {
@@ -84,21 +92,29 @@ fn sendMessage(self: *ChatScreen) void {
 
     // Add user message
     const owned = self.allocator.dupe(u8, user_message) catch return;
-    self.messages.append(self.allocator, Message{ .text = owned, .role = .user }) catch return;
+    self.messages.append(self.allocator, Message{ .content = owned, .role = .user }) catch return;
 
     self.input.clear();
     self.scroll.scrollToBottom();
 
+    std.debug.print("Sending message", .{});
     // Call LLM (blocking — UI freezes until response arrives)
     const response = self.llm.send(self.allocator, owned) catch |err| {
         // On error, show it as an assistant message
         const err_msg = std.fmt.allocPrint(self.allocator, "Error: {}", .{err}) catch return;
-        self.messages.append(self.allocator, Message{ .text = err_msg, .role = .assistant }) catch return;
+        self.messages.append(self.allocator, Message{ .content = err_msg, .role = .assistant }) catch return;
         self.scroll.scrollToBottom();
         return;
     };
 
     // Add assistant response
-    self.messages.append(self.allocator, Message{ .text = response, .role = .assistant }) catch return;
+    const message_obj = Message{ .content = response, .role = .assistant };
+    // TODO: move this two calls into appendMessage
+    self.llm.storage.appendMessage(message_obj);
+    self.llm.storage.current_memory.append(self.allocator, message_obj) catch |err| {
+        std.debug.print("cant write to memory: {}", .{err});
+    };
+    // The above two calls
+    self.messages.append(self.allocator, message_obj) catch return;
     self.scroll.scrollToBottom();
 }
