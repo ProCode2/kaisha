@@ -1,8 +1,10 @@
+// Tool parameter struct definitions
 const PropertyDef = struct {
     type: []const u8,
     description: []const u8,
 };
 
+// Bash Tool
 const BashParams = struct {
     type: []const u8 = "object",
     properties: struct {
@@ -12,6 +14,18 @@ const BashParams = struct {
     required: []const []const u8 = &.{"command"},
 };
 
+const BashFunction = struct {
+    name: []const u8 = "bash",
+    description: []const u8 = "Execute a bash command, Returns stdout and stderr.",
+    parameters: BashParams = .{},
+};
+
+const BashTool = struct {
+    type: []const u8 = "function",
+    function: BashFunction = .{},
+};
+
+// Read Tool
 const ReadParams = struct {
     type: []const u8 = "object",
     properties: struct {
@@ -22,6 +36,18 @@ const ReadParams = struct {
     required: []const []const u8 = &.{"file_path"},
 };
 
+const ReadFunction = struct {
+    name: []const u8 = "read",
+    description: []const u8 = "Read a file content",
+    parameters: ReadParams = .{},
+};
+
+const ReadTool = struct {
+    type: []const u8 = "function",
+    function: ReadFunction = .{},
+};
+
+// Write Tool
 const WriteParams = struct {
     type: []const u8 = "object",
     properties: struct {
@@ -31,6 +57,18 @@ const WriteParams = struct {
     required: []const []const u8 = &.{ "file_path", "content" },
 };
 
+const WriteFunction = struct {
+    name: []const u8 = "write",
+    description: []const u8 = "Write to a file",
+    parameters: WriteParams = .{},
+};
+
+const WriteTool = struct {
+    type: []const u8 = "function",
+    function: WriteFunction = .{},
+};
+
+// Glob Tool
 const GlobParams = struct {
     type: []const u8 = "object",
     properties: struct {
@@ -38,6 +76,17 @@ const GlobParams = struct {
         path: PropertyDef = .{ .type = "string", .description = "Directory to search in" },
     } = .{},
     required: []const []const u8 = &.{"pattern"},
+};
+
+const GlobFunction = struct {
+    name: []const u8 = "glob",
+    description: []const u8 = "Find files and folders by glob pattern matching.",
+    parameters: GlobParams = .{},
+};
+
+const GlobTool = struct {
+    type: []const u8 = "function",
+    function: GlobFunction = .{},
 };
 
 const EditParams = struct {
@@ -50,3 +99,17 @@ const EditParams = struct {
     } = .{},
     required: []const []const u8 = &.{ "file_path", "old_string", "new_string" },
 };
+
+const EditFunction = struct {
+    name: []const u8 = "edit",
+    description: []const u8 = "Edit a file, by replacing an old string with a new one.",
+    parameters: EditParams = .{},
+};
+
+const EditTool = struct {
+    type: []const u8 = "function",
+    function: EditFunction = .{},
+};
+
+// list of all available tools
+pub const definitions = .{ BashTool{}, ReadTool{}, WriteTool{}, EditTool{}, GlobTool{} };
