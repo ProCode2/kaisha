@@ -26,7 +26,7 @@ pub fn post(allocator: std.mem.Allocator, url: []const u8, api_key: []const u8, 
 
     const body_string = try std.json.Stringify.valueAlloc(allocator, body, .{});
     defer allocator.free(body_string);
-    std.debug.print("body: {s}", .{body_string});
+    std.debug.print("body: {s} api-key: {s}", .{ body_string, api_key });
 
     // Build the x-api-key header string: "x-api-key: <key>"
     const key_header = try std.fmt.allocPrintSentinel(allocator, "Authorization: Bearer {s}", .{api_key}, 0);
