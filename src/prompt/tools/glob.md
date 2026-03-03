@@ -38,10 +38,26 @@ When you don't know where something is, search broadly and then narrow down:
 2. Narrow: pattern=* path=~/Documents (see top-level Documents contents)
 3. Specific: pattern=**/*expense* path=~/Documents (find expense files)
 
+AUTOMATICALLY IGNORED:
+The following directories are always skipped — you never need to filter them manually:
+- .git (git internals)
+- node_modules (JS dependencies)
+- .zig-cache, .cache (build caches)
+- __pycache__, venv, .venv, .tox (Python)
+- target (Rust build output)
+- dist, build, .next, .nuxt (JS/TS build output)
+- .svn, .hg (other VCS)
+
+RESULT LIMIT:
+Results are capped at 300. If more than 300 files match, you will see:
+"... N more results not shown (total: X). Use a more specific pattern or path to narrow down."
+When this happens, narrow your search — use a more specific pattern, a deeper path, or add a file extension filter.
+
 IMPORTANT RULES:
 - Always use absolute paths for the path parameter. Use ~ for home directory (e.g. ~/Documents), not relative paths like Documents or ../projects.
 - If you're not sure of the path, start from ~ and explore downward
 - If Glob returns "No files matched" and you expected results, check that the path exists first using Bash: ls ~/expected/path
+- If results are truncated, narrow down with a more specific path (e.g. ~/projects/myapp instead of ~) or a more specific pattern (e.g. **/*.md instead of **/*)
 
 EXAMPLES:
 

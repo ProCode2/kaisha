@@ -2,6 +2,41 @@ const std = @import("std");
 
 const g_allocator = std.heap.page_allocator;
 
+/// Directories and files that are always skipped during glob walks.
+/// Any path segment matching one of these names is excluded entirely,
+/// which also prunes all children of ignored directories.
+const ignored_segments = [_][]const u8{
+    ".git",
+    "node_modules",
+    ".zig-cache",
+    ".cache",
+    "__pycache__",
+    "target",       // Rust build output
+    "dist",         // JS/TS build output
+    "build",        // common build dir
+    ".next",        // Next.js
+    ".nuxt",        // Nuxt.js
+    "venv",         // Python virtualenv
+    ".venv",
+    ".tox",
+    ".svn",
+    ".hg",
+};
+
+/// Maximum number of results before output is truncated.
+const MAX_RESULTS = 300;
+
+/// Returns true if any segment of path matches an ignored name.
+fn isIgnoredPath(path: []const u8) bool {
+    var it = std.mem.splitScalar(u8, path, '/');
+    while (it.next()) |seg| {
+        for (ignored_segments) |name| {
+            if (std.mem.eql(u8, seg, name)) return true;
+        }
+    }
+    return false;
+}
+
 /// Glob files under a certain directory. Use the pattern to match
 /// and use the path parameter to scope your search
 pub fn execute(allocator: std.mem.Allocator, pattern: []const u8, path: []const u8) []const u8 {
@@ -18,9 +53,15 @@ pub fn execute(allocator: std.mem.Allocator, pattern: []const u8, path: []const 
     var paths = std.ArrayListUnmanaged([]const u8).empty;
     defer paths.deinit(allocator);
 
+    var total_matched: usize = 0;
+
     while (walker.next() catch null) |entry| {
         if (entry.kind != .file and entry.kind != .directory) continue;
+        if (isIgnoredPath(entry.path)) continue;
         if (!matchPath(pattern, entry.path)) continue;
+
+        total_matched += 1;
+        if (paths.items.len >= MAX_RESULTS) continue; // count but don't store
 
         const abs_path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ path, entry.path }) catch continue;
         paths.append(allocator, abs_path) catch {
@@ -32,9 +73,27 @@ pub fn execute(allocator: std.mem.Allocator, pattern: []const u8, path: []const 
         return allocator.dupe(u8, "No files matched.") catch "No files matched.";
     }
 
-    const result = std.mem.join(allocator, "\n", paths.items) catch "Error: out of memory";
+    // Build result — append truncation notice if results were capped
+    var out = std.ArrayListUnmanaged(u8).empty;
+    defer out.deinit(allocator);
+
+    for (paths.items, 0..) |p, i| {
+        out.appendSlice(allocator, p) catch {};
+        if (i + 1 < paths.items.len) out.append(allocator, '\n') catch {};
+    }
+
+    if (total_matched > MAX_RESULTS) {
+        const notice = std.fmt.allocPrint(
+            allocator,
+            "\n... {d} more results not shown (total: {d}). Use a more specific pattern or path to narrow down.",
+            .{ total_matched - MAX_RESULTS, total_matched },
+        ) catch "";
+        defer if (notice.len > 0) allocator.free(notice);
+        out.appendSlice(allocator, notice) catch {};
+    }
+
     for (paths.items) |p| allocator.free(p);
-    return result;
+    return out.toOwnedSlice(allocator) catch "Error: out of memory";
 }
 
 /// Match a full relative path (with /) against a glob pattern
