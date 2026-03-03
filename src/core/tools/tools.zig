@@ -23,7 +23,7 @@ const BashParams = struct {
 
 const BashFunction = struct {
     name: []const u8 = "bash",
-    description: []const u8 = "Execute a bash command, Returns stdout and stderr.",
+    description: []const u8 = @embedFile("../../prompt/tools/bash.md"),
     parameters: BashParams = .{},
 };
 
@@ -45,7 +45,7 @@ const ReadParams = struct {
 
 const ReadFunction = struct {
     name: []const u8 = "read",
-    description: []const u8 = "Read a file content",
+    description: []const u8 = @embedFile("../../prompt/tools/read.md"),
     parameters: ReadParams = .{},
 };
 
@@ -66,7 +66,7 @@ const WriteParams = struct {
 
 const WriteFunction = struct {
     name: []const u8 = "write",
-    description: []const u8 = "Write to a file",
+    description: []const u8 = @embedFile("../../prompt/tools/write.md"),
     parameters: WriteParams = .{},
 };
 
@@ -87,7 +87,7 @@ const GlobParams = struct {
 
 const GlobFunction = struct {
     name: []const u8 = "glob",
-    description: []const u8 = "Find files and folders by glob pattern. When you don't know where something is, first explore with pattern='*' and path='~' to see top-level home contents, then narrow down.",
+    description: []const u8 = @embedFile("../../prompt/tools/glob.md"),
     parameters: GlobParams = .{},
 };
 
@@ -109,7 +109,7 @@ const EditParams = struct {
 
 const EditFunction = struct {
     name: []const u8 = "edit",
-    description: []const u8 = "Edit a file, by replacing an old string with a new one.",
+    description: []const u8 = @embedFile("../../prompt/tools/edit.md"),
     parameters: EditParams = .{},
 };
 
