@@ -110,9 +110,12 @@ fn loadCurrentMemory(self: *Storage) void {
         const parsed = std.json.parseFromSlice(Message, self.allocator, line, .{}) catch continue;
         defer parsed.deinit();
 
-        const duped_text = self.allocator.dupe(u8, parsed.value.content) catch continue;
+        const duped_text = if (parsed.value.content) |c|
+            self.allocator.dupe(u8, c) catch continue
+        else
+            null;
         messages.append(self.allocator, .{ .role = parsed.value.role, .content = duped_text }) catch {
-            self.allocator.free(duped_text);
+            if (duped_text) |d| self.allocator.free(d);
             continue;
         };
     }

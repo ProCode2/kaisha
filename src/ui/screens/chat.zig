@@ -8,6 +8,7 @@ const ScrollArea = @import("../components/scroll_area.zig");
 const Message = @import("../../core/message.zig").Message;
 const LyzrProvider = @import("../../core/llm/lyzr.zig");
 const Storage = @import("../../core/storage/storage.zig");
+const Bash = @import("../../core/tools/bash.zig");
 
 const ChatScreen = @This();
 
@@ -37,17 +38,18 @@ pub fn init(allocator: std.mem.Allocator) ChatScreen {
         },
         .llm = LyzrProvider{
             .api_key = allocator.dupe(u8, api_key) catch std.process.exit(1),
-            .agent_id = "697b745c74a8b3af77251166",
+            .agent_id = "6960d9db5e0239738a837720",
             .user_id = "pradipta@lyzr.ai",
             .session_id = "6998513b3c9685c27823bbde-9w5zzmnazx",
             .storage = storage,
+            .bash = Bash.init(allocator),
         },
     };
 }
 
 pub fn deinit(self: *ChatScreen) void {
     for (self.messages.items) |msg| {
-        self.allocator.free(msg.content);
+        if (msg.content) |text| self.allocator.free(text);
     }
     self.messages.deinit(self.allocator);
     self.llm.storage.deinit();
@@ -107,14 +109,7 @@ fn sendMessage(self: *ChatScreen) void {
         return;
     };
 
-    // Add assistant response
-    const message_obj = Message{ .content = response, .role = .assistant };
-    // TODO: move this two calls into appendMessage
-    self.llm.storage.appendMessage(message_obj);
-    self.llm.storage.current_memory.append(self.allocator, message_obj) catch |err| {
-        std.debug.print("cant write to memory: {}", .{err});
-    };
-    // The above two calls
-    self.messages.append(self.allocator, message_obj) catch return;
+    // Add assistant response to UI — storage/memory already handled by lyzr.send()
+    self.messages.append(self.allocator, Message{ .content = response, .role = .assistant }) catch return;
     self.scroll.scrollToBottom();
 }

@@ -1,3 +1,10 @@
+const std = @import("std");
+const Bash = @import("bash.zig");
+const read = @import("read.zig");
+const write = @import("write.zig");
+const edit = @import("edit.zig");
+const glob = @import("glob.zig");
+
 // Tool parameter struct definitions
 const PropertyDef = struct {
     type: []const u8,
@@ -72,15 +79,15 @@ const WriteTool = struct {
 const GlobParams = struct {
     type: []const u8 = "object",
     properties: struct {
-        pattern: PropertyDef = .{ .type = "string", .description = "Glob pattern e.g. **/*.ts" },
-        path: PropertyDef = .{ .type = "string", .description = "Directory to search in" },
+        pattern: PropertyDef = .{ .type = "string", .description = "Glob pattern to match files/folders. Use '*' to list top-level contents, '**/*' for everything recursively, or 'name/**' to find a specific folder." },
+        path: PropertyDef = .{ .type = "string", .description = "Directory to search in. Supports '~' for home directory (e.g. '~/projects'). To discover what exists, start with path='~' and pattern='*', then drill down." },
     } = .{},
     required: []const []const u8 = &.{"pattern"},
 };
 
 const GlobFunction = struct {
     name: []const u8 = "glob",
-    description: []const u8 = "Find files and folders by glob pattern matching.",
+    description: []const u8 = "Find files and folders by glob pattern. When you don't know where something is, first explore with pattern='*' and path='~' to see top-level home contents, then narrow down.",
     parameters: GlobParams = .{},
 };
 
@@ -113,3 +120,113 @@ const EditTool = struct {
 
 // list of all available tools
 pub const definitions = .{ BashTool{}, ReadTool{}, WriteTool{}, EditTool{}, GlobTool{} };
+
+/// Route a tool call to the correct executor.
+/// Parses args_json and calls the matching tool. Never throws — returns error strings.
+pub fn dispatch(allocator: std.mem.Allocator, bash: *Bash, name: []const u8, args_json: []const u8) []const u8 {
+    if (std.mem.eql(u8, name, "bash")) return dispatchBash(allocator, bash, args_json);
+    if (std.mem.eql(u8, name, "read")) return dispatchRead(allocator, bash.cwd, args_json);
+    if (std.mem.eql(u8, name, "write")) return dispatchWrite(allocator, bash.cwd, args_json);
+    if (std.mem.eql(u8, name, "edit")) return dispatchEdit(allocator, bash.cwd, args_json);
+    if (std.mem.eql(u8, name, "glob")) return dispatchGlob(allocator, bash.cwd, args_json);
+    return std.fmt.allocPrint(allocator, "Unknown tool: {s}", .{name}) catch "Unknown tool";
+}
+
+fn dispatchBash(allocator: std.mem.Allocator, bash: *Bash, args_json: []const u8) []const u8 {
+    const Args = struct { command: []const u8 };
+    const parsed = std.json.parseFromSlice(Args, allocator, args_json, .{ .ignore_unknown_fields = true }) catch |err| {
+        return std.fmt.allocPrint(allocator, "Failed to parse bash args: {}", .{err}) catch "Parse error";
+    };
+    defer parsed.deinit();
+    return bash.execute(allocator, parsed.value.command);
+}
+
+/// Resolve a path to absolute:
+/// - `~/...` → expands tilde to $HOME
+/// - relative → joins with cwd
+/// - absolute → returned as-is
+/// Sets `owned` to true if a new allocation was made (caller must free).
+fn resolvePath(allocator: std.mem.Allocator, cwd: []const u8, path: []const u8, owned: *bool) []const u8 {
+    // Expand ~ to $HOME
+    if (std.mem.startsWith(u8, path, "~/") or std.mem.eql(u8, path, "~")) {
+        const home = std.process.getEnvVarOwned(allocator, "HOME") catch {
+            owned.* = false;
+            return path;
+        };
+        defer allocator.free(home);
+        const rest = if (std.mem.eql(u8, path, "~")) "" else path[2..];
+        owned.* = true;
+        return std.fs.path.join(allocator, &.{ home, rest }) catch {
+            owned.* = false;
+            return path;
+        };
+    }
+
+    if (std.fs.path.isAbsolute(path)) {
+        owned.* = false;
+        return path;
+    }
+
+    // Relative — join with cwd
+    owned.* = true;
+    return std.fs.path.join(allocator, &.{ cwd, path }) catch {
+        owned.* = false;
+        return path;
+    };
+}
+
+fn dispatchRead(allocator: std.mem.Allocator, cwd: []const u8, args_json: []const u8) []const u8 {
+    const Args = struct { file_path: []const u8, offset: ?usize = null, limit: ?usize = null };
+    const parsed = std.json.parseFromSlice(Args, allocator, args_json, .{ .ignore_unknown_fields = true }) catch |err| {
+        return std.fmt.allocPrint(allocator, "Failed to parse read args: {}", .{err}) catch "Parse error";
+    };
+    defer parsed.deinit();
+    var owned = false;
+    const path = resolvePath(allocator, cwd, parsed.value.file_path, &owned);
+    defer if (owned) allocator.free(path);
+    return read.execute(allocator, path, parsed.value.offset, parsed.value.limit);
+}
+
+fn dispatchWrite(allocator: std.mem.Allocator, cwd: []const u8, args_json: []const u8) []const u8 {
+    const Args = struct { file_path: []const u8, content: []const u8 };
+    const parsed = std.json.parseFromSlice(Args, allocator, args_json, .{ .ignore_unknown_fields = true }) catch |err| {
+        return std.fmt.allocPrint(allocator, "Failed to parse write args: {}", .{err}) catch "Parse error";
+    };
+    defer parsed.deinit();
+    var owned = false;
+    const path = resolvePath(allocator, cwd, parsed.value.file_path, &owned);
+    defer if (owned) allocator.free(path);
+    return write.execute(allocator, path, parsed.value.content);
+}
+
+fn dispatchEdit(allocator: std.mem.Allocator, cwd: []const u8, args_json: []const u8) []const u8 {
+    const Args = struct { file_path: []const u8, old_string: []const u8, new_string: []const u8, replace_all: bool = false };
+    const parsed = std.json.parseFromSlice(Args, allocator, args_json, .{ .ignore_unknown_fields = true }) catch |err| {
+        return std.fmt.allocPrint(allocator, "Failed to parse edit args: {}", .{err}) catch "Parse error";
+    };
+    defer parsed.deinit();
+    var owned = false;
+    const path = resolvePath(allocator, cwd, parsed.value.file_path, &owned);
+    defer if (owned) allocator.free(path);
+    return edit.execute(allocator, path, parsed.value.old_string, parsed.value.new_string, parsed.value.replace_all);
+}
+
+fn dispatchGlob(allocator: std.mem.Allocator, default_path: []const u8, args_json: []const u8) []const u8 {
+    const Args = struct { pattern: []const u8, path: ?[]const u8 = null };
+    const parsed = std.json.parseFromSlice(Args, allocator, args_json, .{ .ignore_unknown_fields = true }) catch |err| {
+        return std.fmt.allocPrint(allocator, "Failed to parse glob args: {}", .{err}) catch "Parse error";
+    };
+    defer parsed.deinit();
+
+    const raw_path = parsed.value.path orelse default_path;
+
+    // Resolve relative paths against bash cwd
+    if (std.fs.path.isAbsolute(raw_path)) {
+        return glob.execute(allocator, parsed.value.pattern, raw_path);
+    }
+
+    const abs_path = std.fs.path.join(allocator, &.{ default_path, raw_path }) catch
+        return "Error: out of memory";
+    defer allocator.free(abs_path);
+    return glob.execute(allocator, parsed.value.pattern, abs_path);
+}

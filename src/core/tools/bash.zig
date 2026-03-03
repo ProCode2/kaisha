@@ -24,14 +24,14 @@ fn executeInner(self: *Bash, allocator: std.mem.Allocator, command: []const u8) 
     defer allocator.free(wrapped);
 
     var child = std.process.Child.init(&.{ "/bin/sh", "-c", wrapped }, allocator);
-    child.stdout_behavior = .pipe;
-    child.stderr_behavior = .pipe;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
     child.cwd = self.cwd;
 
     try child.spawn();
 
-    const stdout = child.stdout.?.reader().readAllAlloc(allocator, 10_000_000) catch "";
-    const stderr = child.stderr.?.reader().readAllAlloc(allocator, 10_000_000) catch "";
+    const stdout = child.stdout.?.readToEndAlloc(allocator, 10_000_000) catch "";
+    const stderr = child.stderr.?.readToEndAlloc(allocator, 10_000_000) catch "";
     defer allocator.free(stderr);
 
     _ = child.wait() catch {};

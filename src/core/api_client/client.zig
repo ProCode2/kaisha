@@ -24,7 +24,7 @@ pub fn post(allocator: std.mem.Allocator, url: []const u8, api_key: []const u8, 
     const handle = curl.curl_easy_init() orelse return error.CurlInitFailed;
     defer curl.curl_easy_cleanup(handle);
 
-    const body_string = try std.json.Stringify.valueAlloc(allocator, body, .{});
+    const body_string = try std.json.Stringify.valueAlloc(allocator, body, .{ .emit_null_optional_fields = false });
     defer allocator.free(body_string);
     std.debug.print("body: {s} api-key: {s}", .{ body_string, api_key });
 

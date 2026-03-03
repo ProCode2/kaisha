@@ -31,28 +31,17 @@ fn executeInner(allocator: std.mem.Allocator, file_path: []const u8, offset: ?us
     var result = std.ArrayListUnmanaged(u8).empty;
     const writer = result.writer(allocator);
 
-    var buf_reader = std.io.bufferedReader(file.reader());
+    const content = try file.readToEndAlloc(allocator, MAX_FILE_SIZE);
+    defer allocator.free(content);
+
+    var lines = std.mem.splitScalar(u8, content, '\n');
     var line_num: usize = 1;
     var lines_written: usize = 0;
-    var line_buf = std.ArrayListUnmanaged(u8).empty;
-    defer line_buf.deinit(allocator);
 
-    while (true) {
-        line_buf.clearRetainingCapacity();
-        buf_reader.reader().streamUntilDelimiter(line_buf.writer(allocator), '\n', null) catch |err| switch (err) {
-            error.EndOfStream => {
-                if (line_buf.items.len > 0 and line_num >= start and lines_written < max_lines) {
-                    try writer.print("{d: >6}\u{2192}{s}\n", .{ line_num, line_buf.items });
-                    lines_written += 1;
-                }
-                break;
-            },
-            else => return err,
-        };
-
+    while (lines.next()) |line| {
         if (line_num >= start) {
             if (lines_written >= max_lines) break;
-            try writer.print("{d: >6}\u{2192}{s}\n", .{ line_num, line_buf.items });
+            try writer.print("{d: >6}\u{2192}{s}\n", .{ line_num, line });
             lines_written += 1;
         }
         line_num += 1;
