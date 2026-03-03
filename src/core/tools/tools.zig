@@ -219,14 +219,8 @@ fn dispatchGlob(allocator: std.mem.Allocator, default_path: []const u8, args_jso
     defer parsed.deinit();
 
     const raw_path = parsed.value.path orelse default_path;
-
-    // Resolve relative paths against bash cwd
-    if (std.fs.path.isAbsolute(raw_path)) {
-        return glob.execute(allocator, parsed.value.pattern, raw_path);
-    }
-
-    const abs_path = std.fs.path.join(allocator, &.{ default_path, raw_path }) catch
-        return "Error: out of memory";
-    defer allocator.free(abs_path);
+    var owned = false;
+    const abs_path = resolvePath(allocator, default_path, raw_path, &owned);
+    defer if (owned) allocator.free(abs_path);
     return glob.execute(allocator, parsed.value.pattern, abs_path);
 }
