@@ -23,12 +23,14 @@ messages: std.ArrayList(Message) = .empty,
 input_buf: [256]u8 = std.mem.zeroes([256]u8),
 input: TextInput = undefined,
 scroll: ScrollArea = .{ .x = 0, .y = 55, .width = 0, .height = 0 },
-agent: AgentLoop,
+agent: AgentLoop = undefined,
 bash: BashTool,
-http_client: CurlHttpClient,
-openai_provider: OpenAIProvider,
+http_client: CurlHttpClient = .{},
+openai_provider: OpenAIProvider = undefined,
 jsonl_storage: ?JsonlStorage,
-tool_registry: agent_core.ToolRegistry,
+tool_registry: agent_core.ToolRegistry = .{},
+api_key_owned: []const u8 = "",
+setup_done: bool = false,
 
 pub fn init(allocator: std.mem.Allocator) ChatScreen {
     const api_key = std.process.getEnvVarOwned(allocator, "LYZR_API_KEY") catch |err| {
@@ -43,41 +45,43 @@ pub fn init(allocator: std.mem.Allocator) ChatScreen {
     var path_buf: [512]u8 = undefined;
     const storage_path = std.fmt.bufPrint(&path_buf, "{s}/.kaisha", .{home}) catch std.process.exit(1);
 
-    var screen = ChatScreen{
+    return ChatScreen{
         .allocator = allocator,
         .input = TextInput{ .rect = undefined, .buf = undefined },
         .bash = BashTool.init(allocator),
-        .http_client = .{},
-        .openai_provider = undefined,
         .jsonl_storage = JsonlStorage.init(allocator, storage_path),
-        .tool_registry = .{},
-        .agent = undefined,
+        .api_key_owned = allocator.dupe(u8, api_key) catch std.process.exit(1),
     };
+}
+
+/// Must be called after init, once the struct is at its final memory location.
+/// Sets up vtable pointers that reference self's fields.
+fn ensureSetup(self: *ChatScreen) void {
+    if (self.setup_done) return;
+    self.setup_done = true;
 
     // Set bash instance for builtin tools
-    builtins.setBashInstance(&screen.bash);
+    builtins.setBashInstance(&self.bash);
 
     // Register builtin tools
-    builtins.registerAll(&screen.tool_registry, allocator);
+    builtins.registerAll(&self.tool_registry, self.allocator);
 
     // Set up OpenAI provider with curl HTTP backend
-    screen.openai_provider = OpenAIProvider{
-        .http = screen.http_client.client(),
-        .api_key = allocator.dupe(u8, api_key) catch std.process.exit(1),
+    self.openai_provider = OpenAIProvider{
+        .http = self.http_client.client(),
+        .api_key = self.api_key_owned,
         .base_url = "https://agent-prod.studio.lyzr.ai/v4/chat/completions",
         .model = "6960d9db5e0239738a837720",
     };
 
     // Initialize agent loop
-    screen.agent = AgentLoop.init(.{
-        .allocator = allocator,
-        .provider = screen.openai_provider.provider(),
-        .storage = if (screen.jsonl_storage) |*s| s.storage() else null,
-        .tools = &screen.tool_registry,
-        .cwd = screen.bash.cwd,
+    self.agent = AgentLoop.init(.{
+        .allocator = self.allocator,
+        .provider = self.openai_provider.provider(),
+        .storage = if (self.jsonl_storage) |*s| s.storage() else null,
+        .tools = &self.tool_registry,
+        .cwd = self.bash.cwd,
     });
-
-    return screen;
 }
 
 pub fn deinit(self: *ChatScreen) void {
@@ -85,12 +89,14 @@ pub fn deinit(self: *ChatScreen) void {
         if (msg.content) |text| self.allocator.free(text);
     }
     self.messages.deinit(self.allocator);
-    self.agent.deinit();
+    if (self.setup_done) self.agent.deinit();
     self.tool_registry.deinit(self.allocator);
     if (self.jsonl_storage) |*s| s.deinit();
 }
 
 pub fn draw(self: *ChatScreen, theme: Theme) void {
+    self.ensureSetup();
+
     const w = c.GetScreenWidth();
     const h = c.GetScreenHeight();
 
