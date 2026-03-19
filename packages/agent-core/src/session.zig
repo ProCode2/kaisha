@@ -2,9 +2,11 @@ const std = @import("std");
 const Message = @import("message.zig").Message;
 const Role = @import("message.zig").Role;
 
-/// Session entry types following pi-mono's JSONL tree format.
-/// Each entry has an id and parentId forming a tree structure
-/// that supports branching and navigation without file duplication.
+/// 8-char hex session entry ID.
+pub const EntryId = [8]u8;
+const NULL_ID: EntryId = .{ 0, 0, 0, 0, 0, 0, 0, 0 };
+
+/// Entry types in the session JSONL file (pi-mono v3 format).
 pub const EntryType = enum {
     session,
     message,
@@ -14,48 +16,52 @@ pub const EntryType = enum {
     custom,
 };
 
-/// 8-char hex session entry ID.
-pub const EntryId = [8]u8;
-
-/// Session header — first line of a session JSONL file.
-pub const SessionHeader = struct {
-    id: []const u8,
-    cwd: []const u8,
-    timestamp: i64,
-    parent_session: ?[]const u8 = null, // for forked sessions
-};
-
 /// A single entry in the session tree.
+/// Every entry (except header) has a unique id and a parentId pointing to the previous entry.
+/// Multiple entries sharing the same parentId = branches.
 pub const SessionEntry = struct {
-    entry_type: EntryType,
-    id: EntryId,
-    parent_id: ?EntryId = null,
-    timestamp: i64,
-    /// For message entries
+    entry_type: EntryType = .message,
+    id: EntryId = NULL_ID,
+    parent_id: EntryId = NULL_ID,
+    timestamp: i64 = 0,
+
+    // message entries
     message: ?Message = null,
-    /// For model_change entries
+
+    // model_change entries
     model_id: ?[]const u8 = null,
     provider_name: ?[]const u8 = null,
-    /// For compaction entries
+
+    // compaction entries
     summary: ?[]const u8 = null,
-    first_kept_entry_id: ?EntryId = null,
+    first_kept_id: ?EntryId = null,
+    tokens_before: u64 = 0,
 };
 
-/// Manages session files: create, list, load, switch, fork.
-/// Sessions stored at: <base_path>/sessions/<cwd_slug>/<timestamp>_<id>.jsonl
+/// Manages session files with tree-based branching.
+///
+/// File format (pi-mono compatible JSONL):
+///   Line 1: {"type":"session","id":"...","cwd":"...","timestamp":N}
+///   Line N: {"type":"message","id":"abcd1234","parentId":"prev5678","timestamp":N,"message":{...}}
+///
+/// Tree mechanics:
+///   - Every entry has unique 8-char hex id
+///   - parentId references the prior entry (null/zeros for first entry after header)
+///   - Multiple entries with same parentId = branches
+///   - Active branch = chain from current leaf to root
+///   - Fork = copy current branch into new file
 pub const SessionManager = struct {
     allocator: std.mem.Allocator,
-    base_path: []const u8, // e.g. ~/.kaisha
     sessions_dir: std.fs.Dir,
-    current: ?CurrentSession = null,
 
-    pub const CurrentSession = struct {
-        name: []const u8,
-        header: SessionHeader,
-        entries: std.ArrayListUnmanaged(SessionEntry),
-        /// Messages extracted from tree (leaf-to-root traversal)
-        messages: std.ArrayListUnmanaged(Message),
-    };
+    // Current session state
+    session_file: ?[]const u8 = null,
+    session_cwd: ?[]const u8 = null,
+    entries: std.ArrayListUnmanaged(SessionEntry) = .empty,
+    /// ID of the current leaf entry (tip of active branch)
+    leaf_id: EntryId = NULL_ID,
+    /// Counter for unique ID generation
+    id_counter: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator, base_path: []const u8) ?SessionManager {
         std.fs.makeDirAbsolute(base_path) catch |e| if (e != error.PathAlreadyExists) return null;
@@ -67,76 +73,202 @@ pub const SessionManager = struct {
 
         return SessionManager{
             .allocator = allocator,
-            .base_path = base_path,
             .sessions_dir = sessions_dir,
         };
     }
 
-    /// Create a new session and set it as current.
-    pub fn newSession(self: *SessionManager, cwd: []const u8) !void {
-        const id = generateEntryId();
-        const ts = std.time.timestamp();
-        const name = try self.generateSessionFilename(ts, &id);
+    // ── Create / Load ───────────────────────────────────────────────
 
-        // Create the file with session header
-        const file = self.sessions_dir.createFile(name, .{}) catch return error.FileCreateFailed;
+    /// Create a new empty session.
+    pub fn newSession(self: *SessionManager, cwd: []const u8) !void {
+        self.clearCurrent();
+
+        const id = self.nextId();
+        const ts = std.time.timestamp();
+        const filename = try self.makeFilename(ts, &id);
+
+        // Write session header
+        const file = self.sessions_dir.createFile(filename, .{}) catch return error.FileCreateFailed;
         defer file.close();
 
-        const header_json = try std.fmt.allocPrint(
-            self.allocator,
-            \\{{"type":"session","id":"{s}","cwd":"{s}","timestamp":{d}}}
-        , .{ &id, cwd, ts });
-        defer self.allocator.free(header_json);
+        var buf = std.ArrayListUnmanaged(u8).empty;
+        defer buf.deinit(self.allocator);
+        const w = buf.writer(self.allocator);
+        try w.print(
+            \\{{"type":"session","id":"{s}","cwd":{f},"timestamp":{d}}}
+        , .{ &id, std.json.fmt(cwd, .{}), ts });
+        try w.writeByte('\n');
+        try file.writeAll(buf.items);
 
-        try file.writeAll(header_json);
-        try file.writeAll("\n");
-
-        // Set as current
-        if (self.current) |*cur| {
-            self.allocator.free(cur.name);
-            cur.entries.deinit(self.allocator);
-            cur.messages.deinit(self.allocator);
-        }
-
-        self.current = CurrentSession{
-            .name = try self.allocator.dupe(u8, name),
-            .header = .{
-                .id = &id,
-                .cwd = cwd,
-                .timestamp = ts,
-            },
-            .entries = .empty,
-            .messages = .empty,
-        };
+        self.session_file = filename;
+        self.session_cwd = try self.allocator.dupe(u8, cwd);
+        self.leaf_id = NULL_ID;
     }
 
-    /// Append a message to the current session.
+    /// Load an existing session from a JSONL file.
+    pub fn loadSession(self: *SessionManager, filename: []const u8) !void {
+        self.clearCurrent();
+
+        const content = try self.sessions_dir.readFileAlloc(self.allocator, filename, 50 * 1024 * 1024);
+        defer self.allocator.free(content);
+
+        self.session_file = try self.allocator.dupe(u8, filename);
+
+        // Parse line by line
+        var lines = std.mem.splitScalar(u8, content, '\n');
+        var first = true;
+        while (lines.next()) |line| {
+            if (line.len == 0) continue;
+
+            if (first) {
+                first = false;
+                // Parse session header for cwd
+                const Header = struct { cwd: ?[]const u8 = null };
+                const parsed = std.json.parseFromSlice(Header, self.allocator, line, .{ .ignore_unknown_fields = true }) catch continue;
+                defer parsed.deinit();
+                if (parsed.value.cwd) |cwd| {
+                    self.session_cwd = self.allocator.dupe(u8, cwd) catch null;
+                }
+                continue;
+            }
+
+            // Parse entry
+            const JsonEntry = struct {
+                type: ?[]const u8 = null,
+                id: ?[]const u8 = null,
+                parentId: ?[]const u8 = null,
+                @"parentId ": ?[]const u8 = null, // handle potential space
+                timestamp: ?i64 = null,
+                message: ?Message = null,
+            };
+            const parsed = std.json.parseFromSlice(JsonEntry, self.allocator, line, .{ .ignore_unknown_fields = true }) catch continue;
+            defer parsed.deinit();
+
+            const entry_type = parsed.value.type orelse continue;
+            if (!std.mem.eql(u8, entry_type, "message")) continue; // only load messages for now
+
+            var entry = SessionEntry{
+                .entry_type = .message,
+                .timestamp = parsed.value.timestamp orelse 0,
+            };
+
+            if (parsed.value.id) |id_str| {
+                if (id_str.len >= 8) @memcpy(&entry.id, id_str[0..8]);
+            }
+            if (parsed.value.parentId) |pid_str| {
+                if (pid_str.len >= 8) @memcpy(&entry.parent_id, pid_str[0..8]);
+            }
+
+            // Dupe message content
+            if (parsed.value.message) |m| {
+                entry.message = Message{
+                    .role = m.role,
+                    .content = if (m.content) |c| self.allocator.dupe(u8, c) catch null else null,
+                    .tool_call_id = if (m.tool_call_id) |tid| self.allocator.dupe(u8, tid) catch null else null,
+                };
+            }
+
+            self.entries.append(self.allocator, entry) catch continue;
+            self.leaf_id = entry.id;
+        }
+    }
+
+    // ── Tree operations ─────────────────────────────────────────────
+
+    /// Append a message entry as child of the current leaf.
     pub fn appendMessage(self: *SessionManager, message: Message) void {
-        const cur = &(self.current orelse return);
+        const id = self.nextId();
+        const ts = std.time.timestamp();
+
+        const entry = SessionEntry{
+            .entry_type = .message,
+            .id = id,
+            .parent_id = self.leaf_id,
+            .timestamp = ts,
+            .message = message,
+        };
 
         // Write to file
-        const json_line = std.json.Stringify.valueAlloc(self.allocator, message, .{
-            .emit_null_optional_fields = false,
-        }) catch return;
-        defer self.allocator.free(json_line);
+        self.writeEntry(&entry);
 
-        const file = self.sessions_dir.openFile(cur.name, .{ .mode = .write_only }) catch return;
-        defer file.close();
-        file.seekFromEnd(0) catch return;
-        file.writeAll(json_line) catch return;
-        file.writeAll("\n") catch return;
-
-        // Add to in-memory list
-        cur.messages.append(self.allocator, message) catch {};
+        // Update in-memory state
+        self.entries.append(self.allocator, entry) catch {};
+        self.leaf_id = id;
     }
 
-    /// Get current session messages for the agent loop.
-    pub fn getMessages(self: *const SessionManager) []const Message {
-        if (self.current) |cur| return cur.messages.items;
-        return &.{};
+    /// Get messages for the active branch by traversing leaf→root.
+    /// Returns messages in chronological order (root first).
+    pub fn getActiveBranchMessages(self: *const SessionManager, allocator: std.mem.Allocator) []Message {
+        var chain = std.ArrayListUnmanaged(Message).empty;
+
+        // Walk from leaf to root following parentId links
+        var current_id = self.leaf_id;
+        while (!std.mem.eql(u8, &current_id, &NULL_ID)) {
+            const entry = self.findEntry(current_id) orelse break;
+            if (entry.message) |m| {
+                chain.append(allocator, m) catch break;
+            }
+            current_id = entry.parent_id;
+        }
+
+        // Reverse to get chronological order
+        std.mem.reverse(Message, chain.items);
+        return chain.toOwnedSlice(allocator) catch &.{};
     }
 
-    /// List available session files.
+    /// Navigate to a specific entry (branch switch).
+    /// Sets that entry as the new leaf — subsequent appends branch from there.
+    pub fn navigateTo(self: *SessionManager, target_id: EntryId) bool {
+        // Verify the entry exists
+        if (self.findEntry(target_id)) |_| {
+            self.leaf_id = target_id;
+            return true;
+        }
+        return false;
+    }
+
+    /// Fork: create a new session file containing the active branch.
+    pub fn fork(self: *SessionManager, new_cwd: ?[]const u8) ![]const u8 {
+        const cwd = new_cwd orelse self.session_cwd orelse "/";
+        const branch_messages = self.getActiveBranchMessages(self.allocator);
+        defer self.allocator.free(branch_messages);
+
+        // Create new session
+        try self.newSession(cwd);
+
+        // Re-append all messages from the forked branch
+        for (branch_messages) |m| {
+            self.appendMessage(m);
+        }
+
+        return self.session_file orelse error.NoSession;
+    }
+
+    /// Get all entry IDs that are children of a given entry (branches from that point).
+    pub fn getChildren(self: *const SessionManager, parent_id: EntryId, allocator: std.mem.Allocator) []EntryId {
+        var children = std.ArrayListUnmanaged(EntryId).empty;
+        for (self.entries.items) |entry| {
+            if (std.mem.eql(u8, &entry.parent_id, &parent_id)) {
+                children.append(allocator, entry.id) catch continue;
+            }
+        }
+        return children.toOwnedSlice(allocator) catch &.{};
+    }
+
+    /// Check if an entry has multiple children (is a branch point).
+    pub fn isBranchPoint(self: *const SessionManager, entry_id: EntryId) bool {
+        var count: usize = 0;
+        for (self.entries.items) |entry| {
+            if (std.mem.eql(u8, &entry.parent_id, &entry_id)) {
+                count += 1;
+                if (count > 1) return true;
+            }
+        }
+        return false;
+    }
+
+    // ── List sessions ───────────────────────────────────────────────
+
     pub fn listSessions(self: *SessionManager, allocator: std.mem.Allocator) ![][]const u8 {
         var names = std.ArrayListUnmanaged([]const u8).empty;
         var iter = self.sessions_dir.iterate();
@@ -148,16 +280,50 @@ pub const SessionManager = struct {
         return names.toOwnedSlice(allocator);
     }
 
-    pub fn deinit(self: *SessionManager) void {
-        if (self.current) |*cur| {
-            self.allocator.free(cur.name);
-            cur.entries.deinit(self.allocator);
-            cur.messages.deinit(self.allocator);
+    // ── Internal ────────────────────────────────────────────────────
+
+    fn findEntry(self: *const SessionManager, id: EntryId) ?*const SessionEntry {
+        for (self.entries.items) |*entry| {
+            if (std.mem.eql(u8, &entry.id, &id)) return entry;
         }
-        self.sessions_dir.close();
+        return null;
     }
 
-    fn generateSessionFilename(self: *SessionManager, ts: i64, id: *const EntryId) ![]const u8 {
+    fn writeEntry(self: *SessionManager, entry: *const SessionEntry) void {
+        const filename = self.session_file orelse return;
+        const file = self.sessions_dir.openFile(filename, .{ .mode = .write_only }) catch return;
+        defer file.close();
+        file.seekFromEnd(0) catch return;
+
+        var buf = std.ArrayListUnmanaged(u8).empty;
+        defer buf.deinit(self.allocator);
+        const w = buf.writer(self.allocator);
+
+        w.print(
+            \\{{"type":"message","id":"{s}","parentId":"{s}","timestamp":{d},"message":
+        , .{ &entry.id, &entry.parent_id, entry.timestamp }) catch return;
+
+        // Serialize message
+        if (entry.message) |m| {
+            std.json.Stringify.value(w, m, .{ .emit_null_optional_fields = false }) catch return;
+        } else {
+            w.writeAll("null") catch return;
+        }
+
+        w.writeAll("}\n") catch return;
+        file.writeAll(buf.items) catch return;
+    }
+
+    fn nextId(self: *SessionManager) EntryId {
+        self.id_counter += 1;
+        const ts: u32 = @truncate(@as(u64, @intCast(std.time.timestamp())));
+        const hash = ts +% self.id_counter *% 0x9e3779b9;
+        var buf: EntryId = undefined;
+        _ = std.fmt.bufPrint(&buf, "{x:0>8}", .{hash}) catch unreachable;
+        return buf;
+    }
+
+    fn makeFilename(self: *SessionManager, ts: i64, id: *const EntryId) ![]const u8 {
         const uts: u64 = @intCast(ts);
         const es = std.time.epoch.EpochSeconds{ .secs = uts };
         const epoch_day = es.getEpochDay();
@@ -175,14 +341,19 @@ pub const SessionManager = struct {
             id,
         });
     }
-};
 
-/// Generate a random 8-char hex ID.
-fn generateEntryId() EntryId {
-    const ts: u64 = @intCast(std.time.timestamp());
-    // Mix timestamp with a simple hash for uniqueness
-    const hash = ts *% 0x517cc1b727220a95;
-    var buf: EntryId = undefined;
-    _ = std.fmt.bufPrint(&buf, "{x:0>8}", .{@as(u32, @truncate(hash))}) catch unreachable;
-    return buf;
-}
+    fn clearCurrent(self: *SessionManager) void {
+        if (self.session_file) |f| self.allocator.free(f);
+        if (self.session_cwd) |c| self.allocator.free(c);
+        self.session_file = null;
+        self.session_cwd = null;
+        self.entries.clearAndFree(self.allocator);
+        self.leaf_id = NULL_ID;
+    }
+
+    pub fn deinit(self: *SessionManager) void {
+        self.clearCurrent();
+        self.entries.deinit(self.allocator);
+        self.sessions_dir.close();
+    }
+};

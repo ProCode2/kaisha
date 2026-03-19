@@ -56,6 +56,18 @@ pub const JsonlStorage = jsonl.JsonlStorage;
 pub const session = @import("session.zig");
 pub const SessionManager = session.SessionManager;
 
+pub const compaction = @import("compaction.zig");
+pub const Compaction = compaction.Compaction;
+
+pub const skills = @import("skills.zig");
+pub const Skill = skills.Skill;
+
+pub const templates = @import("templates.zig");
+pub const Template = templates.Template;
+
+pub const settings = @import("settings.zig");
+pub const Settings = settings.Settings;
+
 test {
     @import("std").testing.refAllDecls(@This());
 }
