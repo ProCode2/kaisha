@@ -15,7 +15,9 @@ const JsonlStorage = agent_core.JsonlStorage;
 const Event = agent_core.Event;
 const EventQueue = agent_core.events.EventQueue;
 const PermissionGate = agent_core.PermissionGate;
-const LocalTransport = agent_core.LocalTransport;
+const LocalAgentServer = agent_core.LocalAgentServer;
+const LocalAgentClient = agent_core.LocalAgentClient;
+const AgentClient = agent_core.AgentClient;
 const builtins = agent_core.builtins;
 const BashTool = builtins.Bash;
 
@@ -42,8 +44,9 @@ setup_done: bool = false,
 event_queue: EventQueue = .{},
 tool_feed: ToolFeed.ToolFeed = .{},
 permission_gate: PermissionGate = PermissionGate.init(.ask),
-local_transport: LocalTransport = undefined,
-agent_thread: ?std.Thread = null,
+local_server: LocalAgentServer = undefined,
+local_client: LocalAgentClient = undefined,
+client: AgentClient = undefined,
 is_busy: bool = false,
 status_text: [128]u8 = std.mem.zeroes([128]u8),
 status_len: usize = 0,
@@ -83,7 +86,7 @@ fn ensureSetup(self: *ChatScreen) void {
         .model = "6960d9db5e0239738a837720",
     };
 
-    self.local_transport = LocalTransport{
+    self.local_server = LocalAgentServer{
         .event_queue = &self.event_queue,
         .permission_gate = &self.permission_gate,
     };
@@ -94,14 +97,18 @@ fn ensureSetup(self: *ChatScreen) void {
         .storage = if (self.jsonl_storage) |*s| s.storage() else null,
         .tools = &self.tool_registry,
         .cwd = self.bash.cwd,
-        .transport = self.local_transport.transport(),
+        .agent_server = self.local_server.agentServer(),
     });
+
+    self.local_client = LocalAgentClient{
+        .agent = &self.agent,
+        .permission_gate = &self.permission_gate,
+    };
+    self.client = self.local_client.agentClient();
 }
 
 pub fn deinit(self: *ChatScreen) void {
-    // Unblock permission gate before joining thread
-    self.permission_gate.shutdown();
-    if (self.agent_thread) |t| t.join();
+    self.client.shutdown();
     for (self.messages.items) |m| {
         if (m.content) |text| self.allocator.free(text);
     }
@@ -182,15 +189,15 @@ pub fn draw(self: *ChatScreen, theme: Theme) void {
         switch (feed_result.perm_action) {
             .allow => {
                 if (pending_name) |name| self.tool_feed.promoteToRunning(name);
-                self.permission_gate.respond(true);
+                self.client.sendPermission(true, false);
             },
             .allow_always => {
                 if (pending_name) |name| self.tool_feed.promoteToRunning(name);
-                self.permission_gate.respondAlways(true);
+                self.client.sendPermission(true, true);
             },
             .deny => {
                 if (pending_name) |name| self.tool_feed.completeEntry(name, false, "Permission denied by user");
-                self.permission_gate.respond(false);
+                self.client.sendPermission(false, false);
             },
             .none => {},
         }
@@ -208,33 +215,11 @@ fn sendMessage(self: *ChatScreen) void {
     self.input.clear();
     self.scroll.scrollToBottom();
 
-    // Spawn agent thread
     self.is_busy = true;
     self.setStatus("Thinking...");
     self.tool_feed.clear();
 
-    self.agent_thread = std.Thread.spawn(.{}, agentThreadFn, .{ &self.agent, owned }) catch {
-        self.is_busy = false;
-        self.messages.append(self.allocator, Message{
-            .content = self.allocator.dupe(u8, "Error: failed to spawn agent thread") catch return,
-            .role = .assistant,
-        }) catch return;
-        return;
-    };
-}
-
-/// Runs on the agent thread. Calls agent.send() which pushes events to the queue.
-fn agentThreadFn(agent: *AgentLoop, user_message: []const u8) void {
-    _ = agent.send(user_message) catch |err| {
-        const err_msg = std.fmt.allocPrint(agent.config.allocator, "Error: {}", .{err}) catch "Error";
-        if (agent.config.transport) |t| {
-            t.pushEvent(.{ .result = .{
-                .is_error = true,
-                .content_ptr = if (err_msg.len > 0) err_msg.ptr else null,
-                .content_len = err_msg.len,
-            } });
-        }
-    };
+    self.client.sendMessage(owned);
 }
 
 /// Drain events from the queue each frame. Updates UI state.
@@ -307,11 +292,7 @@ fn drainEvents(self: *ChatScreen) void {
                 self.scroll.scrollToBottom();
 
 
-                // Join the thread to clean up
-                if (self.agent_thread) |t| {
-                    t.join();
-                    self.agent_thread = null;
-                }
+                // Thread cleanup handled by LocalAgentClient
             },
         }
     }

@@ -1,6 +1,6 @@
 const std = @import("std");
 const Event = @import("../events.zig").Event;
-const Transport = @import("../transport.zig").Transport;
+const AgentServer = @import("../transport.zig").AgentServer;
 const PermissionGate = @import("../permission.zig").PermissionGate;
 
 /// WebSocket transport — sends events as JSON over a WebSocket connection.
@@ -20,7 +20,7 @@ pub const WebSocketTransport = struct {
     allocator: std.mem.Allocator,
     shutting_down: bool = false,
 
-    const vtable_impl = Transport.VTable{
+    const vtable_impl = AgentServer.VTable{
         .pushEvent = pushEventImpl,
         .checkPermission = checkPermissionImpl,
         .shutdown = shutdownImpl,
@@ -34,7 +34,7 @@ pub const WebSocketTransport = struct {
         };
     }
 
-    pub fn transport(self: *WebSocketTransport) Transport {
+    pub fn agentServer(self: *WebSocketTransport) AgentServer {
         return .{ .ptr = @ptrCast(self), .vtable = &vtable_impl };
     }
 

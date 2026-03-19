@@ -10,7 +10,7 @@ const ToolResult = @import("tool.zig").ToolResult;
 const events_mod = @import("events.zig");
 const Event = events_mod.Event;
 const context_mod = @import("context.zig");
-const Transport = @import("transport.zig").Transport;
+const AgentServer = @import("transport.zig").AgentServer;
 
 /// Default system prompt embedded at compile time.
 const DEFAULT_SYSTEM_PROMPT = @embedFile("prompt/system.md");
@@ -28,7 +28,7 @@ pub const LoopConfig = struct {
     /// Transport — the boundary between agent and UI.
     /// Local mode: LocalTransport (shared memory). Remote mode: WebSocketTransport.
     /// If null, agent runs silently (no events, no permissions — useful for testing).
-    transport: ?Transport = null,
+    agent_server: ?AgentServer = null,
     /// Load AGENTS.md context files from cwd hierarchy. Default: true.
     load_context_files: bool = true,
 };
@@ -99,7 +99,7 @@ pub const AgentLoop = struct {
         var iterations: usize = 0;
         while (self.config.max_iterations == 0 or iterations < self.config.max_iterations) : (iterations += 1) {
             // Bail if shutdown requested
-            if (self.config.transport) |t| {
+            if (self.config.agent_server) |t| {
                 if (t.isShuttingDown()) return allocator.dupe(u8, "");
             }
             self.emitEvent(.turn_start);
@@ -146,7 +146,7 @@ pub const AgentLoop = struct {
 
                 for (response.tool_calls) |call| {
                     // Permission check — may block waiting for user approval
-                    if (self.config.transport) |t| {
+                    if (self.config.agent_server) |t| {
                         if (!t.checkPermission(call.function.name, call.function.arguments)) {
                             self.appendMessage(.{
                                 .role = .tool,
@@ -249,7 +249,7 @@ pub const AgentLoop = struct {
     }
 
     fn emitEvent(self: *const AgentLoop, event: Event) void {
-        if (self.config.transport) |t| t.pushEvent(event);
+        if (self.config.agent_server) |t| t.pushEvent(event);
     }
 
     fn emitResult(self: *const AgentLoop, is_error: bool, text: []const u8) void {

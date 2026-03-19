@@ -73,12 +73,13 @@ pub const PermissionGate = permission.PermissionGate;
 pub const PermissionMode = permission.PermissionMode;
 
 pub const transport = @import("transport.zig");
-pub const Transport = transport.Transport;
-pub const LocalTransport = transport.LocalTransport;
-pub const Command = transport.Command;
+pub const AgentServer = transport.AgentServer;
+pub const AgentClient = transport.AgentClient;
+pub const LocalAgentServer = transport.LocalAgentServer;
+pub const LocalAgentClient = transport.LocalAgentClient;
 
-pub const websocket_transport = @import("transports/websocket.zig");
-pub const WebSocketTransport = websocket_transport.WebSocketTransport;
+pub const websocket_server = @import("transports/websocket.zig");
+pub const WebSocketAgentServer = websocket_server.WebSocketTransport;
 
 test {
     @import("std").testing.refAllDecls(@This());

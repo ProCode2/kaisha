@@ -1,7 +1,7 @@
 const std = @import("std");
 const agent_core = @import("agent_core");
 const AgentLoop = agent_core.AgentLoop;
-const WebSocketTransport = agent_core.WebSocketTransport;
+const WebSocketAgentServer = agent_core.WebSocketAgentServer;
 const builtins = agent_core.builtins;
 const ws = @import("websocket");
 
@@ -10,7 +10,7 @@ const CurlHttpClient = @import("http_curl.zig").CurlHttpClient;
 const g_allocator = std.heap.page_allocator;
 
 // Shared state between WebSocket handler and agent
-var ws_transport: WebSocketTransport = undefined;
+var ws_server: WebSocketAgentServer = undefined;
 var agent: AgentLoop = undefined;
 var http_client: CurlHttpClient = .{};
 var provider: agent_core.OpenAIProvider = undefined;
@@ -47,37 +47,37 @@ pub fn main() !void {
         .model = g_allocator.dupe(u8, model) catch std.process.exit(1),
     };
 
-    ws_transport = WebSocketTransport.init(g_allocator);
+    ws_server = WebSocketAgentServer.init(g_allocator);
 
     agent = AgentLoop.init(.{
         .allocator = g_allocator,
         .provider = provider.provider(),
         .tools = &tool_registry,
         .cwd = bash.cwd,
-        .transport = ws_transport.transport(),
+        .agent_server = ws_server.agentServer(),
     });
 
     std.debug.print("kaisha-server starting on port {d}...\n", .{port});
 
     std.debug.print("kaisha-server listening on ws://0.0.0.0:{d}\n", .{port});
 
-    // Start WebSocket server — Handler is the type, ws_transport is the context
+    // Start WebSocket server — Handler is the type, ws_server is the context
     var server = try ws.Server(Handler).init(g_allocator, .{
         .port = port,
         .address = "0.0.0.0",
     });
 
-    server.listen(&ws_transport) catch |err| {
+    server.listen(&ws_server) catch |err| {
         std.debug.print("Server error: {}\n", .{err});
     };
 }
 
 /// WebSocket handler — websocket.zig calls these methods
 const Handler = struct {
-    wst: *WebSocketTransport,
+    wst: *WebSocketAgentServer,
     conn: *ws.Conn,
 
-    pub fn init(_: *ws.Handshake, conn: *ws.Conn, wst: *WebSocketTransport) !Handler {
+    pub fn init(_: *ws.Handshake, conn: *ws.Conn, wst: *WebSocketAgentServer) !Handler {
         std.debug.print("Client connected\n", .{});
 
         // Register connection with transport so agent thread can push events
