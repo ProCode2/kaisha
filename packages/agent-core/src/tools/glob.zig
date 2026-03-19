@@ -55,7 +55,8 @@ pub fn execute(allocator: std.mem.Allocator, pattern: []const u8, path: []const 
 
     var total_matched: usize = 0;
 
-    while (walker.next() catch null) |entry| {
+    while (true) {
+        const entry = walker.next() catch continue orelse break;
         if (entry.kind != .file and entry.kind != .directory) continue;
         if (isIgnoredPath(entry.path)) continue;
         if (!matchPath(pattern, entry.path)) continue;
@@ -188,6 +189,6 @@ fn matchClass(class: []const u8, ch: u8) bool {
 }
 
 pub fn main() void {
-    const result = execute(g_allocator, "src/*.zig", "/Users/pradipta/random/kaisha");
+    const result = execute(g_allocator, "**/*.md", "/Users/pradipta/random/kaisha");
     std.debug.print("{s}\n", .{result});
 }

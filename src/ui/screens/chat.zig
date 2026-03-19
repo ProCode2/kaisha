@@ -17,6 +17,7 @@ const builtins = agent_core.builtins;
 const BashTool = builtins.Bash;
 
 const ToolFeed = @import("../components/tool_feed.zig");
+const PermissionGate = agent_core.PermissionGate;
 const CurlHttpClient = @import("../../http_curl.zig").CurlHttpClient;
 
 const ChatScreen = @This();
@@ -38,6 +39,7 @@ setup_done: bool = false,
 // Async state
 event_queue: EventQueue = .{},
 tool_feed: ToolFeed.ToolFeed = .{},
+permission_gate: PermissionGate = PermissionGate.init(.ask),
 agent_thread: ?std.Thread = null,
 is_busy: bool = false,
 status_text: [128]u8 = std.mem.zeroes([128]u8),
@@ -85,11 +87,13 @@ fn ensureSetup(self: *ChatScreen) void {
         .tools = &self.tool_registry,
         .cwd = self.bash.cwd,
         .event_queue = &self.event_queue,
+        .permission_gate = &self.permission_gate,
     });
 }
 
 pub fn deinit(self: *ChatScreen) void {
-    // Wait for agent thread if running
+    // Unblock permission gate before joining thread
+    self.permission_gate.shutdown();
     if (self.agent_thread) |t| t.join();
     for (self.messages.items) |m| {
         if (m.content) |text| self.allocator.free(text);
@@ -113,46 +117,76 @@ pub fn draw(self: *ChatScreen, theme: Theme) void {
     c.DrawTextEx(theme.font, "Kaisha", .{ .x = 10, .y = 10 }, theme.font_h1, theme.spacing, theme.text_primary);
     c.DrawTextEx(theme.font, "How may I help you today?", .{ .x = 10, .y = 35 }, theme.font_h2, theme.spacing, theme.text_secondary);
 
-    // Chat area
+    // Read wheel once per frame
+    const wheel = c.GetMouseWheelMove();
+
+    // Input row sits at bottom
+    const input_h: c_int = 40;
+    const input_y = h - input_h - 10;
+
+    // Calculate tool feed height (needed to shrink chat area)
+    var feed_height: c_int = 0;
+    if (self.is_busy and self.tool_feed.count > 0) {
+        var content_h: c_int = 0;
+        for (0..self.tool_feed.count) |i| {
+            content_h += ToolFeed.entryHeight(&self.tool_feed.entries[i]);
+        }
+        feed_height = @min(content_h + 24, 350) + 8;
+    }
+
+    // Tool feed first — it gets priority on scroll if mouse is over it
+    var feed_consumed_scroll = false;
+    var feed_result = ToolFeed.ToolFeed.DrawResult{ .height = 0, .consumed_scroll = false, .perm_action = .none };
+    if (self.tool_feed.count > 0) {
+        feed_result = self.tool_feed.draw(10, input_y, w - 20, wheel, theme);
+        feed_consumed_scroll = feed_result.consumed_scroll;
+    }
+
+    // Chat area — gets wheel only if tool feed didn't consume it
+    const chat_wheel = if (feed_consumed_scroll) @as(f32, 0) else wheel;
     self.scroll.width = w;
-    self.scroll.height = h - 115;
-    const scroll_y = self.scroll.begin();
+    self.scroll.height = h - 115 - feed_height;
+    const scroll_y = self.scroll.beginWithWheel(chat_wheel);
     var msg_y: c_int = 60 + scroll_y;
     for (self.messages.items) |m| {
         msg_y += ChatBubble.draw(self.allocator, m, msg_y, w - 40, theme);
     }
     self.scroll.end(msg_y - scroll_y - 60);
 
-    // Tool activity feed (right side when busy, or if recent tools exist)
-    if (self.tool_feed.count > 0) {
-        const feed_width: c_int = @divTrunc(w, 3);
-        const feed_x = w - feed_width;
-        // Dim separator
-        c.DrawLine(feed_x - 1, 55, feed_x - 1, h - 55, theme.text_secondary);
-        _ = self.tool_feed.draw(feed_x + 4, 60, feed_width - 8, h - 120, theme);
-    }
-
-    // Status indicator while agent is working
-    if (self.is_busy) {
-        const status: [*c]const u8 = if (self.status_len > 0)
-            &self.status_text
-        else
-            "Thinking...";
-        c.DrawTextEx(theme.font, status, .{ .x = 10, .y = @floatFromInt(h - 70) }, theme.font_body, theme.spacing, theme.text_secondary);
-    }
-
     // Input box
     self.input.buf = &self.input_buf;
-    self.input.rect = .{ .x = 10, .y = @floatFromInt(h - 50), .width = @as(f32, @floatFromInt(w - 100)), .height = 40 };
+    self.input.rect = .{ .x = 10, .y = @floatFromInt(input_y), .width = @as(f32, @floatFromInt(w - 100)), .height = @floatFromInt(input_h) };
     self.input.draw(theme);
 
     // Send button
     const send_btn = Button{
-        .rect = .{ .x = @floatFromInt(w - 80), .y = @floatFromInt(h - 50), .width = 70, .height = 40 },
+        .rect = .{ .x = @floatFromInt(w - 80), .y = @floatFromInt(input_y), .width = 70, .height = @floatFromInt(input_h) },
         .label = if (self.is_busy) "..." else "Send",
     };
     if ((send_btn.draw(theme) or c.IsKeyPressed(c.KEY_ENTER)) and !self.is_busy) {
         self.sendMessage();
+    }
+
+    // Handle permission responses from the tool feed
+    if (feed_result.perm_action != .none) {
+        // Find the pending entry name to update its status
+        const pending_name = self.findPendingPermissionName();
+
+        switch (feed_result.perm_action) {
+            .allow => {
+                if (pending_name) |name| self.tool_feed.promoteToRunning(name);
+                self.permission_gate.respond(true);
+            },
+            .allow_always => {
+                if (pending_name) |name| self.tool_feed.promoteToRunning(name);
+                self.permission_gate.respondAlways(true);
+            },
+            .deny => {
+                if (pending_name) |name| self.tool_feed.completeEntry(name, false, "Permission denied by user");
+                self.permission_gate.respond(false);
+            },
+            .none => {},
+        }
     }
 }
 
@@ -207,7 +241,11 @@ fn drainEvents(self: *ChatScreen) void {
             .tool_call_start => |p| {
                 const name = p.tool_name[0..p.tool_name_len];
                 self.setStatusFmt("Running {s}...", .{name});
-                self.tool_feed.addEntry(name, p.getArgs());
+                // If there's a pending permission entry, promote it; otherwise add new
+                self.tool_feed.promoteToRunning(name);
+                if (!self.hasPendingEntry(name)) {
+                    self.tool_feed.addEntry(name, p.getArgs());
+                }
             },
             .tool_call_end => |p| {
                 const name = p.tool_name[0..p.tool_name_len];
@@ -217,6 +255,26 @@ fn drainEvents(self: *ChatScreen) void {
                 } else {
                     self.setStatusFmt("{s} failed", .{name});
                 }
+            },
+            .assistant_text => |r| {
+                // Intermediate text — show in chat before tools run
+                if (r.getContent()) |text| {
+                    const duped = self.allocator.dupe(u8, text) catch "";
+                    if (duped.len > 0) {
+                        self.messages.append(self.allocator, Message{
+                            .content = duped,
+                            .role = .assistant,
+                        }) catch {};
+                        self.scroll.scrollToBottom();
+                    }
+                }
+            },
+            .permission_request => |req| {
+                self.tool_feed.addPermissionEntry(
+                    req.getName(),
+                    req.args_ptr,
+                    req.args_len,
+                );
             },
             .message_start => {},
             .message_end => {},
@@ -239,8 +297,8 @@ fn drainEvents(self: *ChatScreen) void {
 
                 self.is_busy = false;
                 self.status_len = 0;
+                self.tool_feed.clear();
                 self.scroll.scrollToBottom();
-                // Keep tool feed visible briefly — clear on next send
 
 
                 // Join the thread to clean up
@@ -251,6 +309,30 @@ fn drainEvents(self: *ChatScreen) void {
             },
         }
     }
+}
+
+fn findPendingPermissionName(self: *const ChatScreen) ?[]const u8 {
+    var i = self.tool_feed.count;
+    while (i > 0) {
+        i -= 1;
+        const e = &self.tool_feed.entries[i];
+        if (e.status == .pending_permission) {
+            return e.tool_name[0..e.tool_name_len];
+        }
+    }
+    return null;
+}
+
+fn hasPendingEntry(self: *const ChatScreen, name: []const u8) bool {
+    var i = self.tool_feed.count;
+    while (i > 0) {
+        i -= 1;
+        const e = &self.tool_feed.entries[i];
+        if (std.mem.eql(u8, e.tool_name[0..e.tool_name_len], name) and
+            (e.status == .running or e.status == .pending_permission))
+            return true;
+    }
+    return false;
 }
 
 fn setStatus(self: *ChatScreen, text: []const u8) void {

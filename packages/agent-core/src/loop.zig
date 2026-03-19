@@ -12,6 +12,10 @@ const EventBus = events_mod.EventBus;
 const Event = events_mod.Event;
 const EventQueue = events_mod.EventQueue;
 const context_mod = @import("context.zig");
+const PermissionGate = @import("permission.zig").PermissionGate;
+
+/// Default system prompt embedded at compile time.
+const DEFAULT_SYSTEM_PROMPT = @embedFile("prompt/system.md");
 
 /// Agent loop configuration.
 pub const LoopConfig = struct {
@@ -27,6 +31,8 @@ pub const LoopConfig = struct {
     events: ?*EventBus = null,
     /// Optional thread-safe event queue (for cross-thread use).
     event_queue: ?*EventQueue = null,
+    /// Optional permission gate — blocks for user approval before tool execution.
+    permission_gate: ?*PermissionGate = null,
     /// Load AGENTS.md context files from cwd hierarchy. Default: true.
     load_context_files: bool = true,
 };
@@ -53,9 +59,9 @@ pub const AgentLoop = struct {
         var system_parts = std.ArrayListUnmanaged([]const u8).empty;
         defer system_parts.deinit(allocator);
 
-        if (config.system_prompt) |prompt| {
-            system_parts.append(allocator, prompt) catch {};
-        }
+        // Use provided prompt, or fall back to built-in default
+        const base_prompt = config.system_prompt orelse DEFAULT_SYSTEM_PROMPT;
+        system_parts.append(allocator, base_prompt) catch {};
 
         if (config.load_context_files) {
             const ctx = context_mod.loadContextFiles(allocator, config.cwd);
@@ -127,7 +133,30 @@ pub const AgentLoop = struct {
                     .tool_calls = response.tool_calls,
                 });
 
+                // Emit intermediate text so UI can show it before tools run
+                if (response.content) |text| {
+                    if (text.len > 0) {
+                        self.emitEvent(.{ .assistant_text = .{
+                            .is_error = false,
+                            .content_ptr = text.ptr,
+                            .content_len = text.len,
+                        } });
+                    }
+                }
+
                 for (response.tool_calls) |call| {
+                    // Permission check — may block waiting for user approval
+                    if (self.config.permission_gate) |gate| {
+                        if (!gate.check(call.function.name, call.function.arguments, self.config.event_queue)) {
+                            self.appendMessage(.{
+                                .role = .tool,
+                                .content = "Permission denied by user",
+                                .tool_call_id = call.id,
+                            });
+                            continue;
+                        }
+                    }
+
                     self.emitEvent(.{ .tool_call_start = events_mod.makeToolCallPayload(
                         call.function.name,
                         call.function.arguments,

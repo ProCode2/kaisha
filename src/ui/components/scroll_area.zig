@@ -13,14 +13,19 @@ scroll_target: f32 = 0,
 scroll_y_f: f32 = 0,
 
 /// Call before drawing content. Returns the scroll y offset
-/// to add to your content positions
-pub fn begin(self: *ScrollArea) c_int {
-    const wheel = c.GetMouseWheelMove();
-    self.scroll_target += wheel * 35.0;
+/// to add to your content positions.
+/// wheel_delta: pass the frame's wheel value, or 0 if another component consumed it.
+pub fn beginWithWheel(self: *ScrollArea, wheel_delta: f32) c_int {
+    self.scroll_target += wheel_delta * 35.0;
     self.scroll_y_f += (self.scroll_target - self.scroll_y_f) * 0.15;
 
     c.BeginScissorMode(self.x, self.y, self.width, self.height);
     return @intFromFloat(self.scroll_y_f);
+}
+
+/// Legacy: reads wheel directly. Use beginWithWheel for proper scroll ownership.
+pub fn begin(self: *ScrollArea) c_int {
+    return self.beginWithWheel(c.GetMouseWheelMove());
 }
 
 /// Call after drawing content. Pass the total content height

@@ -18,9 +18,15 @@ pub const Event = union(enum) {
     message_start: MessagePayload,
     message_end: MessagePayload,
 
+    // Intermediate assistant text (sent alongside tool calls, before tools run)
+    assistant_text: ResultPayload,
+
     // Tool execution lifecycle
     tool_call_start: ToolCallPayload,
     tool_call_end: ToolCallEndPayload,
+
+    // Permission request (agent thread → UI thread)
+    permission_request: PermissionRequestPayload,
 
     // Final result
     result: ResultPayload,
@@ -59,6 +65,22 @@ pub const Event = union(enum) {
 
         pub fn getOutput(self: *const ToolCallEndPayload) ?[]const u8 {
             if (self.output_ptr) |p| return p[0..self.output_len];
+            return null;
+        }
+    };
+
+    pub const PermissionRequestPayload = struct {
+        tool_name: [64]u8 = .{0} ** 64,
+        tool_name_len: usize = 0,
+        /// Full args JSON pointer (stable — lives in agent.messages)
+        args_ptr: ?[*]const u8 = null,
+        args_len: usize = 0,
+
+        pub fn getName(self: *const PermissionRequestPayload) []const u8 {
+            return self.tool_name[0..self.tool_name_len];
+        }
+        pub fn getArgsJson(self: *const PermissionRequestPayload) ?[]const u8 {
+            if (self.args_ptr) |p| return p[0..self.args_len];
             return null;
         }
     };

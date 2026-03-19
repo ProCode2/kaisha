@@ -68,6 +68,10 @@ pub const Template = templates.Template;
 pub const settings = @import("settings.zig");
 pub const Settings = settings.Settings;
 
+pub const permission = @import("permission.zig");
+pub const PermissionGate = permission.PermissionGate;
+pub const PermissionMode = permission.PermissionMode;
+
 test {
     @import("std").testing.refAllDecls(@This());
 }
