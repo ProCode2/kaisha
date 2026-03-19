@@ -36,6 +36,12 @@ pub const LoopConfig = loop.LoopConfig;
 
 pub const path = @import("path.zig");
 
+pub const events = @import("events.zig");
+pub const Event = events.Event;
+pub const EventBus = events.EventBus;
+
+pub const context = @import("context.zig");
+
 pub const builtins = @import("tools/builtins.zig");
 
 pub const openai = @import("providers/openai.zig");

@@ -7,6 +7,9 @@ const ChatResponse = @import("provider.zig").ChatResponse;
 const Storage = @import("storage.zig").Storage;
 const ToolRegistry = @import("tool.zig").ToolRegistry;
 const ToolResult = @import("tool.zig").ToolResult;
+const EventBus = @import("events.zig").EventBus;
+const Event = @import("events.zig").Event;
+const context_mod = @import("context.zig");
 
 /// Agent loop configuration.
 pub const LoopConfig = struct {
@@ -18,30 +21,54 @@ pub const LoopConfig = struct {
     cwd: []const u8 = "/",
     /// Max tool-call iterations before forced stop. 0 = unlimited (pi-mono style).
     max_iterations: usize = 0,
+    /// Optional event bus for lifecycle events.
+    events: ?*EventBus = null,
+    /// Load AGENTS.md context files from cwd hierarchy. Default: true.
+    load_context_files: bool = true,
 };
 
 /// Agent loop state — holds message history and config.
-/// Following pi-mono: the loop is a struct with a run() method,
-/// but the loop logic itself is straightforward iterate-until-text.
 pub const AgentLoop = struct {
     config: LoopConfig,
     messages: std.ArrayListUnmanaged(Message) = .empty,
+    /// Messages injected mid-turn (delivered after current tool calls finish).
+    steering_queue: std.ArrayListUnmanaged(Message) = .empty,
+    /// Messages delivered when agent would otherwise stop.
+    followup_queue: std.ArrayListUnmanaged(Message) = .empty,
 
     pub fn init(config: LoopConfig) AgentLoop {
         var loop = AgentLoop{ .config = config };
+        const allocator = config.allocator;
 
         // Load existing messages from storage if available
         if (config.storage) |storage| {
-            loop.messages = .{ .items = storage.load(config.allocator), .capacity = 0 };
+            loop.messages = .{ .items = storage.load(allocator), .capacity = 0 };
         }
 
-        // Prepend system prompt if provided and not already present
+        // Build system prompt: base + context files
+        var system_parts = std.ArrayListUnmanaged([]const u8).empty;
+        defer system_parts.deinit(allocator);
+
         if (config.system_prompt) |prompt| {
-            if (loop.messages.items.len == 0 or loop.messages.items[0].role != .system) {
-                loop.messages.insert(config.allocator, 0, .{
-                    .role = .system,
-                    .content = prompt,
-                }) catch {};
+            system_parts.append(allocator, prompt) catch {};
+        }
+
+        if (config.load_context_files) {
+            const ctx = context_mod.loadContextFiles(allocator, config.cwd);
+            if (ctx.len > 0) {
+                system_parts.append(allocator, ctx) catch {};
+            }
+        }
+
+        if (system_parts.items.len > 0) {
+            const full_prompt = std.mem.join(allocator, "\n\n---\n\n", system_parts.items) catch null;
+            if (full_prompt) |prompt| {
+                if (loop.messages.items.len == 0 or loop.messages.items[0].role != .system) {
+                    loop.messages.insert(allocator, 0, .{
+                        .role = .system,
+                        .content = prompt,
+                    }) catch {};
+                }
             }
         }
 
@@ -53,6 +80,8 @@ pub const AgentLoop = struct {
     pub fn send(self: *AgentLoop, user_message: []const u8) ![]const u8 {
         const allocator = self.config.allocator;
 
+        self.emitEvent(.agent_start);
+
         // Append user message
         self.appendMessage(.{ .role = .user, .content = user_message });
 
@@ -62,6 +91,8 @@ pub const AgentLoop = struct {
 
         var iterations: usize = 0;
         while (self.config.max_iterations == 0 or iterations < self.config.max_iterations) : (iterations += 1) {
+            self.emitEvent(.turn_start);
+
             // Call provider
             const response = try self.config.provider.chat(
                 allocator,
@@ -69,23 +100,51 @@ pub const AgentLoop = struct {
                 tool_defs,
             );
 
-            // If we got tool calls, execute them and loop
+            // If we got tool calls, check for steering first
             if (response.tool_calls.len > 0) {
-                // Append assistant message with tool calls
-                self.appendMessage(.{
+                // Steering overrides pending tool calls — the user is redirecting
+                if (self.steering_queue.items.len > 0) {
+                    // Discard tool calls — they were planned before the steer
+                    // Append assistant text content if any (but not tool_calls)
+                    if (response.content) |content| {
+                        self.appendMessage(.{ .role = .assistant, .content = content });
+                    }
+
+                    // Inject steering messages
+                    for (self.steering_queue.items) |sm| {
+                        self.appendMessage(sm);
+                    }
+                    self.steering_queue.clearRetainingCapacity();
+
+                    self.emitEvent(.turn_end);
+                    continue; // re-ask LLM with steering context, no tool execution
+                }
+
+                // No steering — execute tool calls normally
+                const assistant_msg = Message{
                     .role = .assistant,
                     .content = response.content,
                     .tool_calls = response.tool_calls,
-                });
+                };
+                self.appendMessage(assistant_msg);
 
-                // Execute each tool call
                 for (response.tool_calls) |call| {
+                    self.emitEvent(.{ .tool_call_start = .{
+                        .tool_name = call.function.name,
+                        .args = call.function.arguments,
+                    } });
+
                     const result = self.config.tools.dispatch(
                         allocator,
                         self.config.cwd,
                         call.function.name,
                         call.function.arguments,
                     );
+
+                    self.emitEvent(.{ .tool_call_end = .{
+                        .tool_name = call.function.name,
+                        .result = result,
+                    } });
 
                     const output = if (result.success)
                         result.output
@@ -99,29 +158,67 @@ pub const AgentLoop = struct {
                     });
                 }
 
-                // Loop back — send updated history to LLM
+                self.emitEvent(.turn_end);
                 continue;
             }
 
             // No tool calls — final text response
             const text = response.content orelse "";
-            self.appendMessage(.{ .role = .assistant, .content = text });
+            const final_msg = Message{ .role = .assistant, .content = text };
+            self.appendMessage(final_msg);
+
+            self.emitEvent(.turn_end);
+
+            // Check follow-up queue — if messages waiting, inject and continue
+            if (self.followup_queue.items.len > 0) {
+                for (self.followup_queue.items) |fm| {
+                    self.appendMessage(fm);
+                }
+                self.followup_queue.clearRetainingCapacity();
+                continue; // another iteration with follow-up messages
+            }
+
+            self.emitEvent(.{ .agent_end = .{ .messages = self.messages.items } });
             return text;
         }
 
         const err_msg = "Agent loop exceeded maximum iterations";
         self.appendMessage(.{ .role = .assistant, .content = err_msg });
+        self.emitEvent(.{ .agent_end = .{ .messages = self.messages.items } });
         return allocator.dupe(u8, err_msg);
     }
 
+    /// Inject a message mid-turn (delivered after current tool calls finish).
+    pub fn steer(self: *AgentLoop, message: Message) void {
+        self.steering_queue.append(self.config.allocator, message) catch {};
+    }
+
+    /// Queue a message for after the agent stops (follow-up).
+    pub fn followUp(self: *AgentLoop, message: Message) void {
+        self.followup_queue.append(self.config.allocator, message) catch {};
+    }
+
+    /// Change the provider mid-session (model switching).
+    pub fn setProvider(self: *AgentLoop, new_provider: Provider) void {
+        self.config.provider = new_provider;
+    }
+
     fn appendMessage(self: *AgentLoop, message: Message) void {
+        self.emitEvent(.{ .message_start = .{ .message = message } });
         self.messages.append(self.config.allocator, message) catch {};
         if (self.config.storage) |storage| {
             storage.append(message);
         }
+        self.emitEvent(.{ .message_end = .{ .message = message } });
+    }
+
+    fn emitEvent(self: *const AgentLoop, event: Event) void {
+        if (self.config.events) |bus| bus.emit(event);
     }
 
     pub fn deinit(self: *AgentLoop) void {
         self.messages.deinit(self.config.allocator);
+        self.steering_queue.deinit(self.config.allocator);
+        self.followup_queue.deinit(self.config.allocator);
     }
 };
