@@ -41,8 +41,14 @@ pub const builtins = @import("tools/builtins.zig");
 pub const openai = @import("providers/openai.zig");
 pub const OpenAIProvider = openai.OpenAIProvider;
 
+pub const anthropic = @import("providers/anthropic.zig");
+pub const AnthropicProvider = anthropic.AnthropicProvider;
+
 pub const jsonl = @import("storage/jsonl.zig");
 pub const JsonlStorage = jsonl.JsonlStorage;
+
+pub const session = @import("session.zig");
+pub const SessionManager = session.SessionManager;
 
 test {
     @import("std").testing.refAllDecls(@This());
