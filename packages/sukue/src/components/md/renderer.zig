@@ -1,6 +1,6 @@
 const std = @import("std");
-const c = @import("../../../c.zig").c;
-const md = @import("../../../c.zig").md;
+const c = @import("../../c.zig").c;
+const md = @import("../../c.zig").md;
 const Theme = @import("../../theme.zig");
 
 const MdRenderer = @This();

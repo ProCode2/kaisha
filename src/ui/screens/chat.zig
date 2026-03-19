@@ -1,10 +1,11 @@
 const std = @import("std");
-const c = @import("../../c.zig").c;
-const Theme = @import("../theme.zig");
-const Button = @import("../components/button.zig");
-const TextInput = @import("../components/text_input.zig");
+const sukue = @import("sukue");
+const c = sukue.c;
+const Theme = sukue.Theme;
+const Button = sukue.Button;
+const TextInput = sukue.TextInput;
+const ScrollArea = sukue.ScrollArea;
 const ChatBubble = @import("../components/chat_bubble.zig");
-const ScrollArea = @import("../components/scroll_area.zig");
 
 const agent_core = @import("agent_core");
 const AgentLoop = agent_core.AgentLoop;

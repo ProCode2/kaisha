@@ -1,6 +1,7 @@
 const std = @import("std");
-const c = @import("c.zig").c;
-const Theme = @import("ui/theme.zig");
+const sukue = @import("sukue");
+const c = sukue.c;
+const Theme = sukue.Theme;
 const ChatScreen = @import("ui/screens/chat.zig");
 const Screen = @import("ui/screens/screen.zig").Screen;
 
@@ -16,7 +17,6 @@ pub fn main() void {
     var theme = Theme.init();
     defer theme.deinit();
 
-    // initialize screens
     var chat = ChatScreen.init(g_allocator);
     defer chat.deinit();
 

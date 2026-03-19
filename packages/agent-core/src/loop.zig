@@ -102,6 +102,10 @@ pub const AgentLoop = struct {
 
         var iterations: usize = 0;
         while (self.config.max_iterations == 0 or iterations < self.config.max_iterations) : (iterations += 1) {
+            // Bail if shutdown requested
+            if (self.config.permission_gate) |gate| {
+                if (gate.isShuttingDown()) return allocator.dupe(u8, "");
+            }
             self.emitEvent(.turn_start);
 
             // Call provider

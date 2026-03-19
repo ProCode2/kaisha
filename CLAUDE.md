@@ -10,6 +10,8 @@
 - **Research by fit, not popularity.** When comparing tools/frameworks/approaches, rank by relevance to the actual problem, not by GitHub stars or hype.
 - **Own mistakes directly.** If you missed something or gave bad advice, say so plainly. No hedging.
 - **No filler.** No "Certainly!", "Great question!", "I'd be happy to help." Just do the work.
+- **Never let a file grow past ~200 lines.** When a component gets large, stop and refactor into sub-components BEFORE adding more features. Extract reusable pieces into their own files immediately. A 600-line UI file is a failure of discipline, not a success of implementation. Each file should do one thing.
+- **Compose, don't accumulate.** Build small components (diff_view, content_preview, pill_button, json_util) and compose them. Don't inline rendering logic, JSON parsing, and button drawing into one monolithic function.
 
 ---
 
@@ -39,11 +41,11 @@ agent-core/          → Minimal agent loop + tool system (pi-mono equivalent in
 lsp-client/          → LSP client library for Zig
                        (JSON-RPC over stdin/stdout, definition/references/hover/diagnostics)
 
-raylib-widgets/      → raylib/raygui widget library
-                       (chat bubble, markdown renderer, scroll area, text input, theme)
+sukue/      → Lightweight app toolkit for Zig on raylib — simple API, composable components
+                       (theme, scroll, buttons, text, diff view, markdown renderer, layout)
 
 kaisha/              → The desktop app (consumes all of the above)
-                       (raylib UI + agent core + gitagent loader + LSP)
+                       (sukue UI + agent core + gitagent loader + LSP)
 ```
 
 ### Design Decisions Made

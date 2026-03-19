@@ -1,4 +1,4 @@
-const c = @import("../../c.zig").c;
+const c = @import("../c.zig").c;
 const Theme = @import("../theme.zig");
 
 const Button = @This();
@@ -6,7 +6,6 @@ const Button = @This();
 rect: c.Rectangle,
 label: [*c]const u8,
 
-/// Draw the button and return true if clicked.
 pub fn draw(self: Button, theme: Theme) bool {
     const mouse = c.Vector2{
         .x = @floatFromInt(c.GetMouseX()),
@@ -15,16 +14,13 @@ pub fn draw(self: Button, theme: Theme) bool {
     const hovered = c.CheckCollisionPointRec(mouse, self.rect);
     const pressed = hovered and c.IsMouseButtonPressed(c.MOUSE_BUTTON_LEFT);
 
-    // background on hover
     if (hovered) {
         c.SetMouseCursor(c.MOUSE_CURSOR_POINTING_HAND);
         c.DrawRectangleRounded(self.rect, 0.3, 8, theme.user_border);
     }
 
-    // border
     c.DrawRectangleRoundedLines(self.rect, 0.3, 8, theme.user_color);
 
-    // label — centered in the rect
     const measured = c.MeasureTextEx(theme.font, self.label, theme.font_body, theme.spacing);
     const text_x = self.rect.x + (self.rect.width - measured.x) / 2.0;
     const text_y = self.rect.y + (self.rect.height - measured.y) / 2.0;

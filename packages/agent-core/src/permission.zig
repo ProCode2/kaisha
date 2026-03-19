@@ -61,6 +61,11 @@ pub const PermissionGate = struct {
         self.rule_count += 1;
     }
 
+    /// Returns true if shutdown was requested.
+    pub fn isShuttingDown(self: *const PermissionGate) bool {
+        return self.shutting_down;
+    }
+
     /// Check if a tool is allowed to execute. May block if mode is .ask.
     /// Called from the agent thread.
     /// Returns true = allow, false = deny.
@@ -180,13 +185,19 @@ pub const PermissionGate = struct {
 
 fn extractJsonField(json: []const u8, field: []const u8) ?[]const u8 {
     var search_buf: [128]u8 = undefined;
-    const needle = std.fmt.bufPrint(&search_buf, "\"{s}\":\"", .{field}) catch return null;
-    const start_idx = std.mem.indexOf(u8, json, needle) orelse return null;
-    const vs = start_idx + needle.len;
-    if (vs >= json.len) return null;
-    var i = vs;
-    while (i < json.len) : (i += 1) {
-        if (json[i] == '"' and (i == vs or json[i - 1] != '\\')) return json[vs..i];
+    const needles = [_][]const u8{
+        std.fmt.bufPrint(search_buf[0..64], "\"{s}\":\"", .{field}) catch return null,
+        std.fmt.bufPrint(search_buf[64..128], "\"{s}\": \"", .{field}) catch return null,
+    };
+    for (needles) |needle| {
+        const start_idx = std.mem.indexOf(u8, json, needle) orelse continue;
+        const vs = start_idx + needle.len;
+        if (vs >= json.len) continue;
+        var i = vs;
+        while (i < json.len) : (i += 1) {
+            if (json[i] == '"' and (i == vs or json[i - 1] != '\\')) return json[vs..i];
+        }
+        return json[vs..];
     }
-    return json[vs..];
+    return null;
 }
