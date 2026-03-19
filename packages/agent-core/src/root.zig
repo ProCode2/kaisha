@@ -77,6 +77,9 @@ pub const Transport = transport.Transport;
 pub const LocalTransport = transport.LocalTransport;
 pub const Command = transport.Command;
 
+pub const websocket_transport = @import("transports/websocket.zig");
+pub const WebSocketTransport = websocket_transport.WebSocketTransport;
+
 test {
     @import("std").testing.refAllDecls(@This());
 }

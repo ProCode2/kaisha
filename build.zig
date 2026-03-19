@@ -4,6 +4,13 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // --- websocket dependency ---
+    const websocket_dep = b.dependency("websocket", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const websocket_mod = websocket_dep.module("websocket");
+
     // --- sukue UI package ---
     const sukue_mod = b.addModule("sukue", .{
         .root_source_file = b.path("packages/sukue/src/root.zig"),
@@ -11,7 +18,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    // sukue needs raylib, raygui, md4c headers + libs
     sukue_mod.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include" });
     sukue_mod.addIncludePath(b.path("vendor"));
     sukue_mod.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/lib" });
@@ -31,7 +37,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // --- kaisha executable ---
+    // --- kaisha desktop (UI + agent) ---
     const exe = b.addExecutable(.{
         .name = "kaisha",
         .root_module = b.createModule(.{
@@ -45,8 +51,6 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-
-    // kaisha only needs libcurl (for HTTP) — raylib comes through sukue
     exe.root_module.addIncludePath(.{ .cwd_relative = "/opt/homebrew/opt/curl/include" });
     exe.root_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/opt/curl/lib" });
     exe.root_module.linkSystemLibrary("curl", .{});
@@ -57,4 +61,29 @@ pub fn build(b: *std.Build) void {
     run_cmd.step.dependOn(b.getInstallStep());
     const run_step = b.step("run", "Build and run Kaisha");
     run_step.dependOn(&run_cmd.step);
+
+    // --- kaisha-server (headless, no UI, WebSocket) ---
+    const server = b.addExecutable(.{
+        .name = "kaisha-server",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/server_main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "agent_core", .module = agent_core_mod },
+                .{ .name = "websocket", .module = websocket_mod },
+            },
+        }),
+    });
+    server.root_module.addIncludePath(.{ .cwd_relative = "/opt/homebrew/opt/curl/include" });
+    server.root_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/opt/curl/lib" });
+    server.root_module.linkSystemLibrary("curl", .{});
+
+    b.installArtifact(server);
+
+    const server_run = b.addRunArtifact(server);
+    server_run.step.dependOn(b.getInstallStep());
+    const server_step = b.step("server", "Build and run kaisha-server");
+    server_step.dependOn(&server_run.step);
 }
