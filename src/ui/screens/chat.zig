@@ -14,11 +14,12 @@ const OpenAIProvider = agent_core.OpenAIProvider;
 const JsonlStorage = agent_core.JsonlStorage;
 const Event = agent_core.Event;
 const EventQueue = agent_core.events.EventQueue;
+const PermissionGate = agent_core.PermissionGate;
+const LocalTransport = agent_core.LocalTransport;
 const builtins = agent_core.builtins;
 const BashTool = builtins.Bash;
 
 const ToolFeed = @import("../components/tool_feed.zig");
-const PermissionGate = agent_core.PermissionGate;
 const CurlHttpClient = @import("../../http_curl.zig").CurlHttpClient;
 
 const ChatScreen = @This();
@@ -41,6 +42,7 @@ setup_done: bool = false,
 event_queue: EventQueue = .{},
 tool_feed: ToolFeed.ToolFeed = .{},
 permission_gate: PermissionGate = PermissionGate.init(.ask),
+local_transport: LocalTransport = undefined,
 agent_thread: ?std.Thread = null,
 is_busy: bool = false,
 status_text: [128]u8 = std.mem.zeroes([128]u8),
@@ -81,14 +83,18 @@ fn ensureSetup(self: *ChatScreen) void {
         .model = "6960d9db5e0239738a837720",
     };
 
+    self.local_transport = LocalTransport{
+        .event_queue = &self.event_queue,
+        .permission_gate = &self.permission_gate,
+    };
+
     self.agent = AgentLoop.init(.{
         .allocator = self.allocator,
         .provider = self.openai_provider.provider(),
         .storage = if (self.jsonl_storage) |*s| s.storage() else null,
         .tools = &self.tool_registry,
         .cwd = self.bash.cwd,
-        .event_queue = &self.event_queue,
-        .permission_gate = &self.permission_gate,
+        .transport = self.local_transport.transport(),
     });
 }
 
@@ -220,10 +226,9 @@ fn sendMessage(self: *ChatScreen) void {
 /// Runs on the agent thread. Calls agent.send() which pushes events to the queue.
 fn agentThreadFn(agent: *AgentLoop, user_message: []const u8) void {
     _ = agent.send(user_message) catch |err| {
-        // Push error as result event
         const err_msg = std.fmt.allocPrint(agent.config.allocator, "Error: {}", .{err}) catch "Error";
-        if (agent.config.event_queue) |q| {
-            q.push(.{ .result = .{
+        if (agent.config.transport) |t| {
+            t.pushEvent(.{ .result = .{
                 .is_error = true,
                 .content_ptr = if (err_msg.len > 0) err_msg.ptr else null,
                 .content_len = err_msg.len,

@@ -8,11 +8,9 @@ const Storage = @import("storage.zig").Storage;
 const ToolRegistry = @import("tool.zig").ToolRegistry;
 const ToolResult = @import("tool.zig").ToolResult;
 const events_mod = @import("events.zig");
-const EventBus = events_mod.EventBus;
 const Event = events_mod.Event;
-const EventQueue = events_mod.EventQueue;
 const context_mod = @import("context.zig");
-const PermissionGate = @import("permission.zig").PermissionGate;
+const Transport = @import("transport.zig").Transport;
 
 /// Default system prompt embedded at compile time.
 const DEFAULT_SYSTEM_PROMPT = @embedFile("prompt/system.md");
@@ -27,12 +25,10 @@ pub const LoopConfig = struct {
     cwd: []const u8 = "/",
     /// Max tool-call iterations before forced stop. 0 = unlimited (pi-mono style).
     max_iterations: usize = 0,
-    /// Optional callback-based event bus (same-thread use only).
-    events: ?*EventBus = null,
-    /// Optional thread-safe event queue (for cross-thread use).
-    event_queue: ?*EventQueue = null,
-    /// Optional permission gate — blocks for user approval before tool execution.
-    permission_gate: ?*PermissionGate = null,
+    /// Transport — the boundary between agent and UI.
+    /// Local mode: LocalTransport (shared memory). Remote mode: WebSocketTransport.
+    /// If null, agent runs silently (no events, no permissions — useful for testing).
+    transport: ?Transport = null,
     /// Load AGENTS.md context files from cwd hierarchy. Default: true.
     load_context_files: bool = true,
 };
@@ -103,8 +99,8 @@ pub const AgentLoop = struct {
         var iterations: usize = 0;
         while (self.config.max_iterations == 0 or iterations < self.config.max_iterations) : (iterations += 1) {
             // Bail if shutdown requested
-            if (self.config.permission_gate) |gate| {
-                if (gate.isShuttingDown()) return allocator.dupe(u8, "");
+            if (self.config.transport) |t| {
+                if (t.isShuttingDown()) return allocator.dupe(u8, "");
             }
             self.emitEvent(.turn_start);
 
@@ -150,8 +146,8 @@ pub const AgentLoop = struct {
 
                 for (response.tool_calls) |call| {
                     // Permission check — may block waiting for user approval
-                    if (self.config.permission_gate) |gate| {
-                        if (!gate.check(call.function.name, call.function.arguments, self.config.event_queue)) {
+                    if (self.config.transport) |t| {
+                        if (!t.checkPermission(call.function.name, call.function.arguments)) {
                             self.appendMessage(.{
                                 .role = .tool,
                                 .content = "Permission denied by user",
@@ -253,8 +249,7 @@ pub const AgentLoop = struct {
     }
 
     fn emitEvent(self: *const AgentLoop, event: Event) void {
-        if (self.config.events) |bus| bus.emit(event);
-        if (self.config.event_queue) |q| q.push(event);
+        if (self.config.transport) |t| t.pushEvent(event);
     }
 
     fn emitResult(self: *const AgentLoop, is_error: bool, text: []const u8) void {

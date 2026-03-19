@@ -72,6 +72,11 @@ pub const permission = @import("permission.zig");
 pub const PermissionGate = permission.PermissionGate;
 pub const PermissionMode = permission.PermissionMode;
 
+pub const transport = @import("transport.zig");
+pub const Transport = transport.Transport;
+pub const LocalTransport = transport.LocalTransport;
+pub const Command = transport.Command;
+
 test {
     @import("std").testing.refAllDecls(@This());
 }
