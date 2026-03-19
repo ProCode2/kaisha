@@ -41,5 +41,6 @@ fn executeInner(allocator: std.mem.Allocator, file_path: []const u8, old_string:
     defer file.close();
     try file.writeAll(result.items);
 
-    return std.fmt.allocPrint(allocator, "Replaced {d} occurrence(s) in {s}", .{ replacements, file_path });
+    // Return diff-formatted output for UI rendering
+    return std.fmt.allocPrint(allocator, "Replaced {d} occurrence(s) in {s}\n- {s}\n+ {s}", .{ replacements, file_path, old_string, new_string });
 }
