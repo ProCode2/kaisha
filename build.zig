@@ -23,6 +23,13 @@ pub fn build(b: *std.Build) void {
 
     // Create an executable called "kaisha".
     // In Zig 0.15, we pass a root_module instead of root_source_file.
+    // --- agent-core dependency ---
+    const agent_core_mod = b.addModule("agent_core", .{
+        .root_source_file = b.path("packages/agent-core/src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const exe = b.addExecutable(.{
         .name = "kaisha",
         .root_module = b.createModule(.{
@@ -30,6 +37,9 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true, // needed for any C interop
+            .imports = &.{
+                .{ .name = "agent_core", .module = agent_core_mod },
+            },
         }),
     });
 

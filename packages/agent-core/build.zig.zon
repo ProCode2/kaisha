@@ -1,0 +1,7 @@
+.{
+    .name = .agent_core,
+    .version = "0.1.0",
+    .fingerprint = 0xc6163facfc6080d8,
+    .minimum_zig_version = "0.15.0",
+    .paths = .{"src"},
+}

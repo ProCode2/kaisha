@@ -2,7 +2,7 @@ const std = @import("std");
 const c = @import("../../c.zig").c;
 const Theme = @import("../theme.zig");
 const MdRenderer = @import("md/renderer.zig");
-const message = @import("../../core/message.zig");
+const message = @import("agent_core").message;
 
 const ChatBubble = @This();
 

@@ -1,4 +1,4 @@
-pub const MessageRole = enum { user, assistant, tool, system };
+pub const Role = enum { user, assistant, tool, system };
 
 pub const ToolCallFunction = struct {
     name: []const u8,
@@ -12,8 +12,8 @@ pub const ToolCall = struct {
 };
 
 pub const Message = struct {
-    role: MessageRole,
+    role: Role,
     content: ?[]const u8 = null,
-    tool_calls: ?[]const ToolCall = null, // set when role=assistant and LLM wants to call tools
-    tool_call_id: ?[]const u8 = null, // set when role=tool (sending tool result back)
+    tool_calls: ?[]const ToolCall = null,
+    tool_call_id: ?[]const u8 = null,
 };
