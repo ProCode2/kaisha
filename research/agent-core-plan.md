@@ -94,6 +94,67 @@
 
 ---
 
+---
+
+## Upcoming — next implementation tasks (prioritized)
+
+#### 11. Remote execution — Transport interface (NEXT)
+- **Effort:** Medium
+- **Impact:** Critical — foundation for remote agent, autonomous employee, sandboxed execution
+- **What:** Define Transport vtable (pushEvent, pollCommand, waitPermission, requestPermission). Create LocalTransport wrapping existing EventQueue + PermissionGate. Refactor AgentLoop to use Transport. Zero behavior change.
+- **Reference:** research/remote-execution-plan.md
+- **Files:** agent-core/src/transport.zig, refactor loop.zig
+
+#### 12. Remote execution — WebSocket server + kaisha-server binary
+- **Effort:** High
+- **Impact:** Unlocks remote agent — agent runs on server while UI stays on laptop
+- **What:** WebSocketTransport implementing Transport vtable. JSON event/command protocol. New server_main.zig entry point (headless, no raylib). Cross-compile to x86_64-linux.
+- **Reference:** research/remote-execution-plan.md
+- **Files:** agent-core/src/transports/websocket.zig, src/server_main.zig, build.zig
+
+#### 13. Remote execution — Client connection + reconnect
+- **Effort:** Medium
+- **Impact:** Completes the remote story — UI connects to remote agent
+- **What:** WebSocket client in sukue/kaisha. ChatScreen connects to remote or local based on config. State sync on reconnect (server sends full state dump, client rebuilds).
+- **Reference:** research/remote-execution-plan.md
+
+#### 14. LSP integration (lsp-client/ package)
+- **Effort:** High
+- **Impact:** Code intelligence — go-to-definition, references, hover, diagnostics
+- **What:** Standalone lsp-client package. JSON-RPC over stdin/stdout to language servers.
+- **Reference:** Crush (charmbracelet/crush) LSP integration
+- **Files:** New `packages/lsp-client/` package
+
+#### 15. sukue Context abstraction
+- **Effort:** Medium
+- **Impact:** Completes raylib encapsulation — kaisha never touches raylib directly
+- **What:** Context struct wrapping raylib calls. App struct. sukue types. Remove sukue.c re-export.
+- **Reference:** research/ui-package-plan.md
+
+#### 16. gitagent Zig implementation
+- **Effort:** Medium-High
+- **Impact:** Community contribution — first Zig implementation of gitagent.sh standard
+- **What:** Parse agent.yaml, SOUL.md, RULES.md, skills/. Validate, export. CLI + library.
+- **Reference:** research/gitagent-analysis.md
+
+#### 17. Sandboxing
+- **Effort:** Medium
+- **Impact:** Security — safe tool execution
+- **What:** Linux Landlock (~200 lines), Docker fallback
+- **Files:** agent-core/src/sandbox.zig
+
+#### 18. sukue layout + focus system
+- **Effort:** Medium
+- **Impact:** Required for multi-screen apps and keyboard navigation
+- **What:** Vertical/horizontal stack layout, tab focus, active component tracking
+
+#### 19. Autonomous employee features
+- **Effort:** High
+- **Impact:** Long-term vision — agent that works like an employee
+- **What:** Channel integrations (Slack/Discord), computer-use (screen capture), meeting attendance, VM execution. Builds on remote execution (items 11-13).
+
+---
+
 ## Completed phases
 
 ### Phase 1: Extraction (DONE)
@@ -105,7 +166,22 @@
 - Deleted old src/core/
 - All tests pass, app compiles and runs
 
-### Phase 2: Pi-mono parity (IN PROGRESS)
-- Added Anthropic provider
-- Added SessionManager (basic — header + flat append)
-- Remaining: items 1-10 above
+### Phase 2: Pi-mono parity (DONE)
+- Anthropic provider, session tree, compaction, skills, templates, settings
+- Context files (AGENTS.md loading)
+- Events (EventBus + EventQueue)
+- Steering/follow-up messages (steering discards pending tool calls)
+- Model switching mid-session
+
+### Phase 3: Non-blocking UI + permissions (DONE)
+- Agent runs on background thread, UI stays responsive
+- EventQueue bridges agent→UI thread
+- Tool feed with live status, diff rendering, full output display
+- Permission system: inline Allow/Always/Deny in tool feed
+- Scroll ownership (no cascading between components)
+
+### Phase 4: sukue extraction (DONE)
+- Extracted UI components to packages/sukue/
+- sukue owns raylib/raygui/md4c
+- kaisha imports through sukue, transitional sukue.c re-export
+- build.zig: sukue links raylib, kaisha only links curl

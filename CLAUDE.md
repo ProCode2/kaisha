@@ -58,11 +58,16 @@ kaisha/              → The desktop app (consumes all of the above)
 - All tool outputs tell the LLM when they're truncated and how to get more
 
 ### Implementation Order
-1. **Now:** Finish pi-mono parity (extensions, skills, multi-provider, sessions)
-2. **Next:** LSP integration (biggest differentiator — makes Kaisha better than pi-mono for coding)
-3. **Then:** Vtable refactor (after 2+ providers exist — don't abstract prematurely)
-4. **Then:** Sandboxing (Landlock on Linux, seatbelt on macOS, Docker fallback)
-5. **Later:** Autonomous employee features (channels, computer-use, meetings, VM execution)
+1. ~~Pi-mono parity~~ DONE (providers, sessions, compaction, skills, templates, settings, events, steering)
+2. ~~Non-blocking UI + permissions~~ DONE (thread, EventQueue, tool feed, permission gate)
+3. ~~sukue extraction~~ DONE (UI package owns raylib, kaisha imports through sukue)
+4. **NOW: Remote execution** — Transport interface → WebSocket server → kaisha-server binary → client reconnect (research/remote-execution-plan.md)
+5. **Next:** LSP integration (lsp-client/ package)
+6. **Then:** sukue Context abstraction (remove transitional sukue.c, wrap raylib fully)
+7. **Then:** gitagent Zig implementation
+8. **Then:** Sandboxing (Landlock on Linux, Docker fallback)
+9. **Later:** sukue layout + focus system
+10. **Later:** Autonomous employee features (channels, computer-use, meetings — builds on remote execution)
 
 ### Key References
 - Pi-mono: https://github.com/badlogic/pi-mono (architecture reference)
