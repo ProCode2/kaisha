@@ -96,6 +96,58 @@
 
 ---
 
+## Pi-mono parity gaps — built but not wired
+
+These modules exist in agent-core but are NOT used by kaisha:
+
+| Module | What it does | What's missing |
+|--------|-------------|----------------|
+| skills.zig | Load skills from .kaisha/skills/ | Never called. Agent unaware of skills. |
+| templates.zig | Load prompt templates, /name expansion | Never called. No /command in UI. |
+| compaction.zig | Summarize old messages at token limit | Never called. Long sessions die. |
+| settings.zig | Load model/provider/config from JSON | Never called. Everything hardcoded. |
+| session.zig | Session tree, fork, branch, navigate | Only basic JSONL used. Tree features unwired. |
+| steering | AgentLoop.steer() discards tool calls | UI blocks all input while agent is busy. |
+| follow-up | AgentLoop.followUp() | UI never calls it. |
+
+### Fix priorities (implement in this order):
+
+#### P1. Allow typing while agent is busy + steering
+- Remove `!self.is_busy` from input gate in chat.zig
+- When busy: Send becomes "Steer", calls client.sendSteer()
+- Agent receives steering, discards pending tool calls, re-asks LLM
+- This is the most impactful missing feature
+
+#### P2. Load settings from JSON
+- Call Settings.load(allocator, cwd) at startup
+- Use for model, provider, base_url, api_key env var name
+- Remove hardcoded model IDs and URLs from chat.zig and server_main.zig
+- Settings file: ~/.kaisha/settings.json + .kaisha/settings.json (project overrides)
+
+#### P3. Auto-compaction
+- Before each LLM call in loop.zig, check compaction.shouldCompact(messages)
+- If true, run compaction.compact() — summarize old messages, keep recent
+- Prevents token limit death on long sessions
+- Critical for real usage
+
+#### P4. Load skills at startup
+- Call skills.loadSkills(allocator, cwd) in loop.zig init
+- Append skill names + descriptions to system prompt
+- Agent can reference skills: "Use the code-review skill for this"
+- Skills loaded from ~/.kaisha/skills/ and .kaisha/skills/
+
+#### P5. Template expansion (/commands)
+- In sendMessage, check if input starts with /
+- Look up template by name, expand {{variables}}, send expanded text
+- Templates from ~/.kaisha/prompts/ and .kaisha/prompts/
+
+#### P6. Session management UI
+- New session, switch session, fork from current point
+- Session list panel
+- Requires UI work (new screen or panel)
+
+---
+
 ## Upcoming — next implementation tasks (prioritized)
 
 #### 11. Remote execution — Transport interface (NEXT)

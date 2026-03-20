@@ -1,0 +1,6 @@
+{
+    "api_key_env": "LYZR_API_KEY",
+    "base_url": "https://agent-prod.studio.lyzr.ai/v4/chat/completions",
+    "model": "6960d9db5e0239738a837720",
+    "max_iterations": 0
+}

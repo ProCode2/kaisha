@@ -1,0 +1,7 @@
+.{
+    .name = .secrets_proxy,
+    .version = "0.1.0",
+    .fingerprint = 0x28d7fdfae52c9cb2,
+    .minimum_zig_version = "0.15.0",
+    .paths = .{"src"},
+}

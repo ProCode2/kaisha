@@ -21,9 +21,16 @@ const RemoteAgentClient = agent_core.RemoteAgentClient;
 const AgentClient = agent_core.AgentClient;
 const builtins = agent_core.builtins;
 const BashTool = builtins.Bash;
+const secrets = @import("secrets_proxy");
+const SecretProxy = secrets.SecretProxy;
 
 const ToolFeed = @import("../components/tool_feed.zig");
+const SecretsPanel = @import("../components/secrets_panel.zig").SecretsPanel;
 const ZigHttpClient = @import("../../http_curl.zig").ZigHttpClient;
+
+// Module-level proxy so function pointers can reference it (Zig has no closures)
+var g_secret_proxy: SecretProxy = undefined;
+var g_proxy_initialized: bool = false;
 
 const ChatScreen = @This();
 
@@ -47,6 +54,8 @@ tool_feed: ToolFeed.ToolFeed = .{},
 permission_gate: PermissionGate = PermissionGate.init(.ask),
 local_server: LocalAgentServer = undefined,
 local_client: LocalAgentClient = undefined,
+secret_proxy: SecretProxy = undefined,
+secrets_panel: SecretsPanel = undefined,
 remote_client: ?*RemoteAgentClient = null,
 client: AgentClient = undefined,
 is_remote: bool = false,
@@ -109,6 +118,8 @@ fn ensureSetup(self: *ChatScreen) void {
 
         self.is_remote = true;
         self.client = self.remote_client.?.agentClient();
+        self.secrets_panel = SecretsPanel.init(self.allocator);
+        self.secrets_panel.setRemote(self.remote_client.?);
         std.debug.print("Connected to remote server at {s}:{d}\n", .{ host, port });
     } else {
         self.setupLocal();
@@ -119,13 +130,26 @@ fn setupLocal(self: *ChatScreen) void {
     builtins.setBashInstance(&self.bash);
     builtins.registerAll(&self.tool_registry, self.allocator);
 
+    // Init secrets proxy (module-level for function pointer access)
+    g_secret_proxy = SecretProxy.init(self.allocator);
+    g_proxy_initialized = true;
+    self.secrets_panel = SecretsPanel.init(self.allocator);
+    self.secrets_panel.setProxy(&g_secret_proxy);
+
+    // Load settings (global + project)
+    const settings = agent_core.Settings.load(self.allocator, self.bash.cwd);
+
+    // Resolve API key from settings or env
+    const api_key_env = settings.api_key_env orelse "LYZR_API_KEY";
+    const api_key = std.process.getEnvVarOwned(self.allocator, api_key_env) catch self.api_key_owned;
+
     self.http_client = ZigHttpClient.init(self.allocator);
 
     self.openai_provider = OpenAIProvider{
         .http = self.http_client.client(),
-        .api_key = self.api_key_owned,
-        .base_url = "https://agent-prod.studio.lyzr.ai/v4/chat/completions",
-        .model = "6960d9db5e0239738a837720",
+        .api_key = api_key,
+        .base_url = settings.base_url orelse "https://agent-prod.studio.lyzr.ai/v4/chat/completions",
+        .model = settings.model orelse "6960d9db5e0239738a837720",
     };
 
     self.local_server = LocalAgentServer{
@@ -138,8 +162,20 @@ fn setupLocal(self: *ChatScreen) void {
         .provider = self.openai_provider.provider(),
         .storage = if (self.jsonl_storage) |*s| s.storage() else null,
         .tools = &self.tool_registry,
-        .cwd = self.bash.cwd,
+        .cwd_ptr = &self.bash.cwd,
         .agent_server = self.local_server.agentServer(),
+        .substitute_fn = struct {
+            fn sub(allocator: std.mem.Allocator, text: []const u8) []const u8 {
+                if (!g_proxy_initialized) return text;
+                return g_secret_proxy.substitute(allocator, text);
+            }
+        }.sub,
+        .mask_fn = struct {
+            fn mask(allocator: std.mem.Allocator, text: []const u8) []const u8 {
+                if (!g_proxy_initialized) return text;
+                return g_secret_proxy.mask(allocator, text);
+            }
+        }.mask,
     });
 
     self.local_client = LocalAgentClient{
@@ -177,6 +213,15 @@ pub fn draw(self: *ChatScreen, theme: Theme) void {
     c.DrawTextEx(theme.font, "Kaisha", .{ .x = 10, .y = 10 }, theme.font_h1, theme.spacing, theme.text_primary);
     c.DrawTextEx(theme.font, "How may I help you today?", .{ .x = 10, .y = 35 }, theme.font_h2, theme.spacing, theme.text_secondary);
 
+    // Secrets toggle button (top right)
+    const secrets_btn = Button{
+        .rect = .{ .x = @floatFromInt(w - 80), .y = 8, .width = 70, .height = 24 },
+        .label = if (self.secrets_panel.visible) "Close" else "Secrets",
+    };
+    if (secrets_btn.draw(theme)) {
+        self.secrets_panel.toggle();
+    }
+
     // Read wheel once per frame
     const wheel = c.GetMouseWheelMove();
 
@@ -192,9 +237,15 @@ pub fn draw(self: *ChatScreen, theme: Theme) void {
         feed_consumed_scroll = feed_result.consumed_scroll;
     }
 
-    // Chat area — shrinks by actual tool feed height
+    // Secrets panel (right sidebar)
+    const secrets_panel_width: c_int = if (self.secrets_panel.visible) 300 else 0;
+    if (self.secrets_panel.visible) {
+        _ = self.secrets_panel.draw(w - secrets_panel_width, 55, secrets_panel_width, h - 65, theme);
+    }
+
+    // Chat area — shrinks by tool feed height and secrets panel width
     const chat_wheel = if (feed_consumed_scroll) @as(f32, 0) else wheel;
-    self.scroll.width = w;
+    self.scroll.width = w - secrets_panel_width;
     self.scroll.height = h - 115 - feed_result.height;
     const scroll_y = self.scroll.beginWithWheel(chat_wheel);
     var msg_y: c_int = 60 + scroll_y;
@@ -210,13 +261,17 @@ pub fn draw(self: *ChatScreen, theme: Theme) void {
     self.input.rect = .{ .x = 10, .y = @floatFromInt(input_y), .width = @as(f32, @floatFromInt(w - 100)), .height = @floatFromInt(input_h) };
     self.input.draw(theme);
 
-    // Send button
+    // Send / Steer button
     const send_btn = Button{
         .rect = .{ .x = @floatFromInt(w - 80), .y = @floatFromInt(input_y), .width = 70, .height = @floatFromInt(input_h) },
-        .label = if (self.is_busy) "..." else "Send",
+        .label = if (self.is_busy) "Steer" else "Send",
     };
-    if ((send_btn.draw(theme) or c.IsKeyPressed(c.KEY_ENTER)) and !self.is_busy) {
-        self.sendMessage();
+    if (send_btn.draw(theme) or c.IsKeyPressed(c.KEY_ENTER)) {
+        if (self.is_busy) {
+            self.steerAgent();
+        } else {
+            self.sendMessage();
+        }
     }
 
     // Handle permission responses from the tool feed
@@ -242,12 +297,35 @@ pub fn draw(self: *ChatScreen, theme: Theme) void {
     }
 }
 
+fn steerAgent(self: *ChatScreen) void {
+    const steer_text = self.input.getText();
+    if (steer_text.len == 0) return;
+
+    const owned = self.allocator.dupe(u8, steer_text) catch return;
+    self.messages.append(self.allocator, Message{ .content = owned, .role = .user }) catch return;
+
+    self.input.clear();
+    self.scroll.scrollToBottom();
+
+    self.client.sendSteer(owned);
+}
+
 fn sendMessage(self: *ChatScreen) void {
     const user_message = self.input.getText();
     if (user_message.len == 0) return;
 
+    // Template expansion: /name → expand template
+    var final_message = user_message;
+    if (user_message.len > 1 and user_message[0] == '/') {
+        const template_name = user_message[1..];
+        const templates = agent_core.templates.loadTemplates(self.allocator, self.bash.cwd);
+        if (agent_core.templates.findTemplate(templates, template_name)) |tmpl| {
+            final_message = tmpl.content;
+        }
+    }
+
     // Add user message to UI immediately
-    const owned = self.allocator.dupe(u8, user_message) catch return;
+    const owned = self.allocator.dupe(u8, final_message) catch return;
     self.messages.append(self.allocator, Message{ .content = owned, .role = .user }) catch return;
 
     self.input.clear();

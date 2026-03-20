@@ -13,6 +13,13 @@ pub fn build(b: *std.Build) void {
     });
     const websocket_mod = websocket_dep.module("websocket");
 
+    // --- secrets-proxy package ---
+    const secrets_proxy_mod = b.addModule("secrets_proxy", .{
+        .root_source_file = b.path("packages/secrets-proxy/src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // --- agent-core package ---
     const agent_core_mod = b.addModule("agent_core", .{
         .root_source_file = b.path("packages/agent-core/src/root.zig"),
@@ -33,6 +40,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "agent_core", .module = agent_core_mod },
                 .{ .name = "websocket", .module = websocket_mod },
+                .{ .name = "secrets_proxy", .module = secrets_proxy_mod },
             },
         }),
     });
@@ -74,6 +82,7 @@ pub fn build(b: *std.Build) void {
                 .imports = &.{
                     .{ .name = "sukue", .module = sukue_mod },
                     .{ .name = "agent_core", .module = agent_core_mod },
+                    .{ .name = "secrets_proxy", .module = secrets_proxy_mod },
                 },
             }),
         });

@@ -11,6 +11,8 @@ const events_mod = @import("events.zig");
 const Event = events_mod.Event;
 const context_mod = @import("context.zig");
 const AgentServer = @import("transport.zig").AgentServer;
+const Compaction = @import("compaction.zig").Compaction;
+const skills_mod = @import("skills.zig");
 
 /// Default system prompt embedded at compile time.
 const DEFAULT_SYSTEM_PROMPT = @embedFile("prompt/system.md");
@@ -22,7 +24,15 @@ pub const LoopConfig = struct {
     storage: ?Storage = null,
     tools: *const ToolRegistry,
     system_prompt: ?[]const u8 = null,
-    cwd: []const u8 = "/",
+    /// Pointer to current working directory. Must point to stable memory
+    /// (e.g. &bash.cwd) so it always reflects the latest cwd after cd commands.
+    cwd_ptr: *const []const u8,
+    /// Optional: substitute secret placeholders in tool args before execution.
+    substitute_fn: ?*const fn (std.mem.Allocator, []const u8) []const u8 = null,
+    /// Optional: mask secret values in tool output after execution.
+    mask_fn: ?*const fn (std.mem.Allocator, []const u8) []const u8 = null,
+    /// Optional: extra system prompt section (e.g. available secrets list).
+    extra_system_prompt: ?[]const u8 = null,
     /// Max tool-call iterations before forced stop. 0 = unlimited (pi-mono style).
     max_iterations: usize = 0,
     /// Transport — the boundary between agent and UI.
@@ -60,10 +70,27 @@ pub const AgentLoop = struct {
         system_parts.append(allocator, base_prompt) catch {};
 
         if (config.load_context_files) {
-            const ctx = context_mod.loadContextFiles(allocator, config.cwd);
+            const ctx = context_mod.loadContextFiles(allocator, config.cwd_ptr.*);
             if (ctx.len > 0) {
                 system_parts.append(allocator, ctx) catch {};
             }
+        }
+
+        // Load skills and append to system prompt
+        const loaded_skills = skills_mod.loadSkills(allocator, config.cwd_ptr.*);
+        if (loaded_skills.len > 0) {
+            var skill_prompt = std.ArrayListUnmanaged(u8).empty;
+            const sw = skill_prompt.writer(allocator);
+            sw.writeAll("\n## Available Skills\n") catch {};
+            for (loaded_skills) |skill| {
+                sw.print("- **{s}**: invoke with /skill:{s}\n", .{ skill.name, skill.name }) catch {};
+            }
+            system_parts.append(allocator, skill_prompt.toOwnedSlice(allocator) catch "") catch {};
+        }
+
+        // Append extra system prompt (e.g. secrets list)
+        if (config.extra_system_prompt) |extra| {
+            if (extra.len > 0) system_parts.append(allocator, extra) catch {};
         }
 
         if (system_parts.items.len > 0) {
@@ -103,6 +130,16 @@ pub const AgentLoop = struct {
                 if (t.isShuttingDown()) return allocator.dupe(u8, "");
             }
             self.emitEvent(.turn_start);
+
+            // Auto-compact if approaching token limit
+            const compaction = Compaction{};
+            if (compaction.shouldCompact(self.messages.items)) {
+                const compacted = compaction.compact(allocator, self.messages.items, self.config.provider) catch self.messages.items;
+                if (compacted.ptr != self.messages.items.ptr) {
+                    self.messages.clearRetainingCapacity();
+                    for (compacted) |m| self.messages.append(allocator, m) catch {};
+                }
+            }
 
             // Call provider
             const response = try self.config.provider.chat(
@@ -162,14 +199,25 @@ pub const AgentLoop = struct {
                         call.function.arguments,
                     ) });
 
+                    // Substitute secret placeholders in args
+                    const resolved_args = if (self.config.substitute_fn) |sub|
+                        sub(allocator, call.function.arguments)
+                    else
+                        call.function.arguments;
+
                     const result = self.config.tools.dispatch(
                         allocator,
-                        self.config.cwd,
+                        self.config.cwd_ptr.*,
                         call.function.name,
-                        call.function.arguments,
+                        resolved_args,
                     );
 
-                    const output = if (result.success) result.output else result.error_msg orelse "Tool execution failed";
+                    // Mask secret values in output
+                    const raw_output = if (result.success) result.output else result.error_msg orelse "Tool execution failed";
+                    const output = if (self.config.mask_fn) |m|
+                        m(allocator, raw_output)
+                    else
+                        raw_output;
 
                     self.emitEvent(.{ .tool_call_end = events_mod.makeToolCallEndPayload(
                         call.function.name,

@@ -13,6 +13,10 @@ pub fn draw(self: *TextInput, theme: Theme) void {
     if (c.GuiTextBox(self.rect, self.buf, 256, self.editing) != 0) {
         self.editing = !self.editing;
     }
+
+    if (self.editing) {
+        handleClipboard(self.buf, 256);
+    }
 }
 
 pub fn getText(self: TextInput) []const u8 {
@@ -21,4 +25,36 @@ pub fn getText(self: TextInput) []const u8 {
 
 pub fn clear(self: *TextInput) void {
     @memset(self.buf, 0);
+}
+
+/// Clipboard support for any null-terminated buffer used with GuiTextBox.
+/// Call after GuiTextBox when the field is active (editing = true).
+/// Supports: Ctrl+V/Cmd+V (paste), Ctrl+A (select all → clear + paste ready).
+pub fn handleClipboard(buf: [*]u8, max: usize) void {
+    const ctrl = c.IsKeyDown(c.KEY_LEFT_SUPER) or c.IsKeyDown(c.KEY_RIGHT_SUPER) or
+        c.IsKeyDown(c.KEY_LEFT_CONTROL) or c.IsKeyDown(c.KEY_RIGHT_CONTROL);
+    if (!ctrl) return;
+
+    if (c.IsKeyPressed(c.KEY_V)) {
+        // Paste — append clipboard text at end of current content
+        const clip = c.GetClipboardText() orelse return;
+        var end: usize = 0;
+        while (end < max - 1 and buf[end] != 0) end += 1;
+        var i: usize = 0;
+        while (end < max - 1) : ({
+            end += 1;
+            i += 1;
+        }) {
+            if (clip[i] == 0) break;
+            buf[end] = clip[i];
+        }
+        buf[end] = 0;
+    } else if (c.IsKeyPressed(c.KEY_A)) {
+        // Select all — mark for replacement (clear buffer, next paste replaces all)
+        // Since GuiTextBox doesn't support selection, Ctrl+A clears the field
+        @memset(buf[0..max], 0);
+    } else if (c.IsKeyPressed(c.KEY_C)) {
+        // Copy — copy current content to clipboard
+        c.SetClipboardText(buf);
+    }
 }

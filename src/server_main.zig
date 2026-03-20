@@ -6,7 +6,7 @@ const builtins = agent_core.builtins;
 const ws = @import("websocket");
 
 const ZigHttpClient = @import("http_curl.zig").ZigHttpClient;
-
+const secrets = @import("secrets_proxy");
 
 const g_allocator = std.heap.page_allocator;
 
@@ -17,6 +17,8 @@ var http_client: ZigHttpClient = undefined;
 var provider: agent_core.OpenAIProvider = undefined;
 var tool_registry: agent_core.ToolRegistry = .{};
 var bash: builtins.Bash = undefined;
+var secret_proxy: secrets.SecretProxy = undefined;
+var secrets_tool_static: agent_core.tool.StaticTool = undefined;
 
 pub fn main() !void {
     const port: u16 = 8420;
@@ -41,6 +43,21 @@ pub fn main() !void {
     builtins.setBashInstance(&bash);
     builtins.registerAll(&tool_registry, g_allocator);
 
+    // Init secrets proxy + register secrets tool
+    secret_proxy = secrets.SecretProxy.init(g_allocator);
+    secrets_tool_static = agent_core.tool.StaticTool{
+        ._name = secrets.secrets_tool.TOOL_NAME,
+        ._description = secrets.secrets_tool.TOOL_DESCRIPTION,
+        ._parameters_json = secrets.secrets_tool.TOOL_PARAMETERS,
+        ._executeFn = struct {
+            fn exec(allocator: std.mem.Allocator, _: []const u8, args_json: []const u8) agent_core.ToolResult {
+                const output = secrets.secrets_tool.execute(&secret_proxy.store, allocator, args_json);
+                return agent_core.ToolResult.ok(output);
+            }
+        }.exec,
+    };
+    tool_registry.register(g_allocator, secrets_tool_static.tool());
+
     http_client = ZigHttpClient.init(g_allocator);
 
     provider = agent_core.OpenAIProvider{
@@ -56,8 +73,18 @@ pub fn main() !void {
         .allocator = g_allocator,
         .provider = provider.provider(),
         .tools = &tool_registry,
-        .cwd = bash.cwd,
+        .cwd_ptr = &bash.cwd,
         .agent_server = ws_server.agentServer(),
+        .substitute_fn = struct {
+            fn sub(allocator: std.mem.Allocator, text: []const u8) []const u8 {
+                return secret_proxy.substitute(allocator, text);
+            }
+        }.sub,
+        .mask_fn = struct {
+            fn mask(allocator: std.mem.Allocator, text: []const u8) []const u8 {
+                return secret_proxy.mask(allocator, text);
+            }
+        }.mask,
     });
 
     std.debug.print("kaisha-server starting on port {d}...\n", .{port});
@@ -122,6 +149,34 @@ const Handler = struct {
             if (parsed.value.content) |content| {
                 agent.steer(.{ .role = .user, .content = content });
             }
+        } else if (std.mem.eql(u8, cmd_type, "secrets_sync")) {
+            // Parse and store secrets
+            const SyncMsg = struct { secrets: ?[]const secrets.protocol.SecretEntry = null };
+            const sync_parsed = std.json.parseFromSlice(SyncMsg, g_allocator, msg, .{ .ignore_unknown_fields = true }) catch return;
+            defer sync_parsed.deinit();
+
+            secret_proxy.store.clear();
+            if (sync_parsed.value.secrets) |entries| {
+                for (entries) |entry| {
+                    secret_proxy.store.set(entry.name, entry.value, entry.description, entry.scope);
+                }
+            }
+            std.debug.print("Secrets synced: {d} entries\n", .{secret_proxy.store.count()});
+
+            // Send confirmation (names only)
+            self.conn.write("{\"type\":\"secrets_synced\"}") catch {};
+        } else if (std.mem.eql(u8, cmd_type, "secret_update")) {
+            const UpdateMsg = struct { name: ?[]const u8 = null, value: ?[]const u8 = null };
+            const up = std.json.parseFromSlice(UpdateMsg, g_allocator, msg, .{ .ignore_unknown_fields = true }) catch return;
+            defer up.deinit();
+            if (up.value.name) |n| {
+                if (up.value.value) |v| secret_proxy.store.set(n, v, null, null);
+            }
+        } else if (std.mem.eql(u8, cmd_type, "secret_delete")) {
+            const DelMsg = struct { name: ?[]const u8 = null };
+            const del = std.json.parseFromSlice(DelMsg, g_allocator, msg, .{ .ignore_unknown_fields = true }) catch return;
+            defer del.deinit();
+            if (del.value.name) |n| secret_proxy.store.delete(n);
         } else {
             self.wst.onMessage(msg);
         }

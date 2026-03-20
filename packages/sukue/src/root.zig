@@ -13,6 +13,9 @@ pub const content_preview = @import("components/content_preview.zig");
 pub const diff_view = @import("components/diff_view.zig");
 pub const MdRenderer = @import("components/md/renderer.zig");
 
+pub const MaskedInput = @import("components/masked_input.zig").MaskedInput;
+pub const KeyValueList = @import("components/key_value_list.zig").KeyValueList;
+
 // Util
 pub const json_util = @import("util/json.zig");
 

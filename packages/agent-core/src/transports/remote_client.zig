@@ -111,7 +111,7 @@ pub const RemoteAgentClient = struct {
 
     /// Send data over WebSocket. Copies to mutable buffer because the library
     /// requires mutable data for WebSocket masking.
-    fn wsSend(self: *RemoteAgentClient, data: []const u8) void {
+    pub fn wsSend(self: *RemoteAgentClient, data: []const u8) void {
         const mutable = self.allocator.dupe(u8, data) catch return;
         defer self.allocator.free(mutable);
         self.ws_client.write(mutable) catch {};
