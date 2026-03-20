@@ -296,7 +296,9 @@ pub fn draw(self: MdRenderer) c_int {
                     }
 
                     c.DrawTextEx(font, &buf, .{ .x = cur_x, .y = cur_y }, size, self.theme.spacing, text_color);
-                    cur_x += measured.x + self.theme.spacing * 3;
+                    // Advance by word width + space width (measured from font)
+                    const space_w = c.MeasureTextEx(font, " ", size, self.theme.spacing).x;
+                    cur_x += measured.x + space_w;
                 }
             },
         }

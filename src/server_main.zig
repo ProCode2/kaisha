@@ -5,14 +5,15 @@ const WebSocketAgentServer = agent_core.WebSocketAgentServer;
 const builtins = agent_core.builtins;
 const ws = @import("websocket");
 
-const CurlHttpClient = @import("http_curl.zig").CurlHttpClient;
+const ZigHttpClient = @import("http_curl.zig").ZigHttpClient;
+
 
 const g_allocator = std.heap.page_allocator;
 
 // Shared state between WebSocket handler and agent
 var ws_server: WebSocketAgentServer = undefined;
 var agent: AgentLoop = undefined;
-var http_client: CurlHttpClient = .{};
+var http_client: ZigHttpClient = undefined;
 var provider: agent_core.OpenAIProvider = undefined;
 var tool_registry: agent_core.ToolRegistry = .{};
 var bash: builtins.Bash = undefined;
@@ -39,6 +40,8 @@ pub fn main() !void {
     bash = builtins.Bash.init(g_allocator);
     builtins.setBashInstance(&bash);
     builtins.registerAll(&tool_registry, g_allocator);
+
+    http_client = ZigHttpClient.init(g_allocator);
 
     provider = agent_core.OpenAIProvider{
         .http = http_client.client(),
@@ -79,6 +82,10 @@ const Handler = struct {
 
     pub fn init(_: *ws.Handshake, conn: *ws.Conn, wst: *WebSocketAgentServer) !Handler {
         std.debug.print("Client connected\n", .{});
+
+        // Reset agent + permission state for fresh conversation
+        agent.reset();
+        ws_server.permission_gate.reset();
 
         // Register connection with transport so agent thread can push events
         wst.setConnection(@ptrCast(conn), struct {

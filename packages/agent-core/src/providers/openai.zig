@@ -55,11 +55,9 @@ pub const OpenAIProvider = struct {
             .{ .name = "Authorization", .value = auth_value },
         };
 
-        // Make HTTP request
         const raw = try self.http.post(allocator, self.base_url, &headers, body);
         defer allocator.free(raw);
 
-        // Parse response (handles both streaming SSE and non-streaming JSON)
         return parseResponse(allocator, raw);
     }
 };
@@ -70,7 +68,7 @@ fn buildRequestBody(allocator: std.mem.Allocator, model: []const u8, messages: [
     const w = buf.writer(allocator);
 
     try w.print(
-        \\{{"model":"{s}","stream":true,"messages":[
+        \\{{"model":"{s}","stream":true,"max_tokens":8192,"messages":[
     , .{model});
 
     for (messages, 0..) |m, i| {
@@ -126,6 +124,26 @@ fn writeMessage(w: anytype, m: Message) !void {
 
 /// Parse OpenAI streaming SSE response into ChatResponse.
 fn parseResponse(allocator: std.mem.Allocator, raw: []const u8) !ChatResponse {
+    // Check for non-SSE error responses (plain JSON like {"detail":"Invalid API Key"})
+    if (raw.len > 0 and raw[0] == '{') {
+        const ErrorResp = struct { detail: ?[]const u8 = null, @"error": ?struct { message: ?[]const u8 = null } = null };
+        if (std.json.parseFromSlice(ErrorResp, allocator, raw, .{ .ignore_unknown_fields = true })) |parsed| {
+            defer parsed.deinit();
+            const err_msg = if (parsed.value.detail) |d|
+                d
+            else if (parsed.value.@"error") |e|
+                e.message orelse "Unknown API error"
+            else
+                null;
+            if (err_msg) |m| {
+                return ChatResponse{
+                    .content = try allocator.dupe(u8, m),
+                    .stop_reason = .err,
+                };
+            }
+        } else |_| {}
+    }
+
     var text_buf = std.ArrayListUnmanaged(u8).empty;
     defer text_buf.deinit(allocator);
 

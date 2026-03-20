@@ -148,7 +148,13 @@
 - **Impact:** Required for multi-screen apps and keyboard navigation
 - **What:** Vertical/horizontal stack layout, tab focus, active component tracking
 
-#### 19. Autonomous employee features
+#### 19. sukue text selection
+- **Effort:** Medium (200-300 lines)
+- **Impact:** UX — proper click-drag text selection + copy in chat bubbles
+- **What:** Track mouse down/drag/up, compute character positions from font metrics, highlight selection rect, copy to clipboard. Currently click-to-copy-whole-message as stopgap.
+- **Files:** sukue/src/components/text_selection.zig
+
+#### 20. Autonomous employee features
 - **Effort:** High
 - **Impact:** Long-term vision — agent that works like an employee
 - **What:** Channel integrations (Slack/Discord), computer-use (screen capture), meeting attendance, VM execution. Builds on remote execution (items 11-13).

@@ -17,12 +17,13 @@ const EventQueue = agent_core.events.EventQueue;
 const PermissionGate = agent_core.PermissionGate;
 const LocalAgentServer = agent_core.LocalAgentServer;
 const LocalAgentClient = agent_core.LocalAgentClient;
+const RemoteAgentClient = agent_core.RemoteAgentClient;
 const AgentClient = agent_core.AgentClient;
 const builtins = agent_core.builtins;
 const BashTool = builtins.Bash;
 
 const ToolFeed = @import("../components/tool_feed.zig");
-const CurlHttpClient = @import("../../http_curl.zig").CurlHttpClient;
+const ZigHttpClient = @import("../../http_curl.zig").ZigHttpClient;
 
 const ChatScreen = @This();
 
@@ -33,7 +34,7 @@ input: TextInput = undefined,
 scroll: ScrollArea = .{ .x = 0, .y = 55, .width = 0, .height = 0 },
 agent: AgentLoop = undefined,
 bash: BashTool,
-http_client: CurlHttpClient = .{},
+http_client: ZigHttpClient = undefined,
 openai_provider: OpenAIProvider = undefined,
 jsonl_storage: ?JsonlStorage,
 tool_registry: agent_core.ToolRegistry = .{},
@@ -46,7 +47,9 @@ tool_feed: ToolFeed.ToolFeed = .{},
 permission_gate: PermissionGate = PermissionGate.init(.ask),
 local_server: LocalAgentServer = undefined,
 local_client: LocalAgentClient = undefined,
+remote_client: ?*RemoteAgentClient = null,
 client: AgentClient = undefined,
+is_remote: bool = false,
 is_busy: bool = false,
 status_text: [128]u8 = std.mem.zeroes([128]u8),
 status_len: usize = 0,
@@ -76,8 +79,47 @@ fn ensureSetup(self: *ChatScreen) void {
     if (self.setup_done) return;
     self.setup_done = true;
 
+    // Check for remote mode: KAISHA_SERVER=host:port
+    const server_env = std.process.getEnvVarOwned(self.allocator, "KAISHA_SERVER") catch null;
+
+    if (server_env) |server_addr| {
+        defer self.allocator.free(server_addr);
+        // Parse host:port
+        var host: []const u8 = "127.0.0.1";
+        var port: u16 = 8420;
+        if (std.mem.indexOfScalar(u8, server_addr, ':')) |colon| {
+            host = server_addr[0..colon];
+            port = std.fmt.parseInt(u16, server_addr[colon + 1 ..], 10) catch 8420;
+        } else {
+            host = server_addr;
+        }
+
+        self.remote_client = RemoteAgentClient.connect(
+            self.allocator,
+            self.allocator.dupe(u8, host) catch return,
+            port,
+            &self.event_queue,
+        ) catch |err| {
+            std.debug.print("Failed to connect to remote server: {}\n", .{err});
+            // Fall through to local mode
+            self.remote_client = null;
+            self.setupLocal();
+            return;
+        };
+
+        self.is_remote = true;
+        self.client = self.remote_client.?.agentClient();
+        std.debug.print("Connected to remote server at {s}:{d}\n", .{ host, port });
+    } else {
+        self.setupLocal();
+    }
+}
+
+fn setupLocal(self: *ChatScreen) void {
     builtins.setBashInstance(&self.bash);
     builtins.registerAll(&self.tool_registry, self.allocator);
+
+    self.http_client = ZigHttpClient.init(self.allocator);
 
     self.openai_provider = OpenAIProvider{
         .http = self.http_client.client(),
@@ -108,7 +150,11 @@ fn ensureSetup(self: *ChatScreen) void {
 }
 
 pub fn deinit(self: *ChatScreen) void {
-    self.client.shutdown();
+    if (self.is_remote) {
+        if (self.remote_client) |rc| rc.deinit();
+    } else {
+        self.client.shutdown();
+    }
     for (self.messages.items) |m| {
         if (m.content) |text| self.allocator.free(text);
     }
@@ -138,17 +184,7 @@ pub fn draw(self: *ChatScreen, theme: Theme) void {
     const input_h: c_int = 40;
     const input_y = h - input_h - 10;
 
-    // Calculate tool feed height (needed to shrink chat area)
-    var feed_height: c_int = 0;
-    if (self.is_busy and self.tool_feed.count > 0) {
-        var content_h: c_int = 0;
-        for (0..self.tool_feed.count) |i| {
-            content_h += ToolFeed.entryHeight(&self.tool_feed.entries[i]);
-        }
-        feed_height = @min(content_h + 24, 350) + 8;
-    }
-
-    // Tool feed first — it gets priority on scroll if mouse is over it
+    // Tool feed first — draw it to get its actual height
     var feed_consumed_scroll = false;
     var feed_result = ToolFeed.ToolFeed.DrawResult{ .height = 0, .consumed_scroll = false, .perm_action = .none };
     if (self.tool_feed.count > 0) {
@@ -156,16 +192,18 @@ pub fn draw(self: *ChatScreen, theme: Theme) void {
         feed_consumed_scroll = feed_result.consumed_scroll;
     }
 
-    // Chat area — gets wheel only if tool feed didn't consume it
+    // Chat area — shrinks by actual tool feed height
     const chat_wheel = if (feed_consumed_scroll) @as(f32, 0) else wheel;
     self.scroll.width = w;
-    self.scroll.height = h - 115 - feed_height;
+    self.scroll.height = h - 115 - feed_result.height;
     const scroll_y = self.scroll.beginWithWheel(chat_wheel);
     var msg_y: c_int = 60 + scroll_y;
     for (self.messages.items) |m| {
-        msg_y += ChatBubble.draw(self.allocator, m, msg_y, w - 40, theme);
+        const blocked_y = if (feed_result.height > 0) input_y - feed_result.height - 8 else @as(c_int, 0);
+        msg_y += ChatBubble.draw(self.allocator, m, msg_y, w - 40, theme, blocked_y);
     }
     self.scroll.end(msg_y - scroll_y - 60);
+    ChatBubble.drawToast(theme);
 
     // Input box
     self.input.buf = &self.input_buf;

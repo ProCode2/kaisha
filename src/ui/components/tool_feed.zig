@@ -97,7 +97,7 @@ pub const ToolFeed = struct {
         var content_h: c_int = 0;
         for (0..self.count) |i| content_h += entryHeight(&self.entries[i]);
 
-        const panel_h = @min(content_h + PAD * 2, MAX_HEIGHT);
+        const panel_h = @min(content_h + PAD * 3, MAX_HEIGHT);
         const panel_y = bottom_y - panel_h - GAP_FROM_INPUT;
         // Panel background + top border
         c.DrawRectangleRounded(
@@ -135,10 +135,16 @@ pub const ToolFeed = struct {
         c.BeginScissorMode(x, panel_y, width, panel_h);
         var draw_y = content_start;
         var perm_action = PermissionAction.none;
+        var perm_handled = false; // only first pending entry gets input
         for (0..self.count) |i| {
-            const result = drawEntry(&self.entries[i], x + PAD, draw_y, width - PAD * 2, theme);
+            const is_active_perm = self.entries[i].status == .pending_permission and !perm_handled;
+            const result = drawEntry(&self.entries[i], x + PAD, draw_y, width - PAD * 2, theme, is_active_perm);
             draw_y += result.height;
-            if (result.perm_action != .none) perm_action = result.perm_action;
+            if (result.perm_action != .none) {
+                perm_action = result.perm_action;
+                perm_handled = true;
+            }
+            if (is_active_perm) perm_handled = true;
         }
         c.EndScissorMode();
 
@@ -205,7 +211,7 @@ pub fn entryHeight(entry: *const FeedEntry) c_int {
     return h;
 }
 
-fn drawEntry(entry: *const FeedEntry, x: c_int, y: c_int, width: c_int, theme: Theme) struct { height: c_int, perm_action: PermissionAction } {
+fn drawEntry(entry: *const FeedEntry, x: c_int, y: c_int, width: c_int, theme: Theme, accept_perm_input: bool) struct { height: c_int, perm_action: PermissionAction } {
     const LH: c_int = 16;
     const font_sm = theme.font_body - 3;
     var draw_y = y;
@@ -233,17 +239,25 @@ fn drawEntry(entry: *const FeedEntry, x: c_int, y: c_int, width: c_int, theme: T
         draw_y += LH;
     }
 
-    // Permission buttons
+    // Permission buttons — only the active (first) pending entry accepts input
     if (entry.status == .pending_permission) {
         draw_y += 4;
         const bw = ToolFeed.BTN_W;
         const bh = ToolFeed.BTN_H;
-        if (pill_button.draw(x + 14, draw_y, bw, bh, "Allow (y)", theme.success, theme)) perm_action = .allow;
-        if (pill_button.draw(x + 14 + bw + 6, draw_y, bw + 20, bh, "Always (a)", theme.info, theme)) perm_action = .allow_always;
-        if (pill_button.draw(x + 14 + bw * 2 + 32, draw_y, bw, bh, "Deny (n)", theme.danger, theme)) perm_action = .deny;
-        if (c.IsKeyPressed(c.KEY_Y) or c.IsKeyPressed(c.KEY_ENTER)) perm_action = .allow;
-        if (c.IsKeyPressed(c.KEY_A)) perm_action = .allow_always;
-        if (c.IsKeyPressed(c.KEY_N) or c.IsKeyPressed(c.KEY_ESCAPE)) perm_action = .deny;
+        if (accept_perm_input) {
+            if (pill_button.draw(x + 14, draw_y, bw, bh, "Allow (y)", theme.success, theme)) perm_action = .allow;
+            if (pill_button.draw(x + 14 + bw + 6, draw_y, bw + 20, bh, "Always (a)", theme.info, theme)) perm_action = .allow_always;
+            if (pill_button.draw(x + 14 + bw * 2 + 32, draw_y, bw, bh, "Deny (n)", theme.danger, theme)) perm_action = .deny;
+            if (c.IsKeyPressed(c.KEY_Y) or c.IsKeyPressed(c.KEY_ENTER)) perm_action = .allow;
+            if (c.IsKeyPressed(c.KEY_A)) perm_action = .allow_always;
+            if (c.IsKeyPressed(c.KEY_N) or c.IsKeyPressed(c.KEY_ESCAPE)) perm_action = .deny;
+        } else {
+            // Draw buttons dimmed (not interactive)
+            const dim = c.Color{ .r = 60, .g = 60, .b = 70, .a = 255 };
+            _ = pill_button.draw(x + 14, draw_y, bw, bh, "Allow (y)", dim, theme);
+            _ = pill_button.draw(x + 14 + bw + 6, draw_y, bw + 20, bh, "Always (a)", dim, theme);
+            _ = pill_button.draw(x + 14 + bw * 2 + 32, draw_y, bw, bh, "Deny (n)", dim, theme);
+        }
         draw_y += bh + 4;
     }
 

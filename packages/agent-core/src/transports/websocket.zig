@@ -176,9 +176,8 @@ fn serializeEvent(w: anytype, event: Event) !void {
         },
         .result => |r| {
             try w.print("{{\"type\":\"result\",\"error\":{}", .{r.is_error});
-            if (r.getContent()) |c| {
-                try w.print(",\"content\":{f}", .{std.json.fmt(c, .{})});
-            }
+            const content = r.getContent() orelse "";
+            try w.print(",\"content\":{f}", .{std.json.fmt(content, .{})});
             try w.writeByte('}');
         },
     }

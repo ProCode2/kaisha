@@ -25,13 +25,13 @@ border: c.Color = .{ .r = 55, .g = 58, .b = 75, .a = 255 },
 separator: c.Color = .{ .r = 50, .g = 52, .b = 65, .a = 200 },
 
 font_h1: f32 = 22,
-font_h2: f32 = 13,
-font_body: f32 = 15,
-spacing: f32 = 1,
+font_h2: f32 = 16,
+font_body: f32 = 16,
+spacing: f32 = 0,
 padding: c_int = 8,
 border_radius: f32 = 0.2,
 
-const font_size = 32;
+const font_size = 48;
 
 const codepoints = blk: {
     var cp: [224 + 112]c_int = undefined;
@@ -48,17 +48,15 @@ fn loadFont(path: [*c]const u8) c.Font {
 }
 
 pub fn init() Theme {
+    const jb = loadFont("fonts/JetBrainsMono-Regular.ttf");
     return Theme{
-        .font = loadFont("fonts/Inter-Regular.ttf"),
-        .font_bold = loadFont("fonts/Inter-Bold.ttf"),
-        .font_italic = loadFont("fonts/Inter-Italic.ttf"),
-        .font_mono = loadFont("fonts/JetBrainsMono-Regular.ttf"),
+        .font = jb,
+        .font_bold = jb,
+        .font_italic = jb,
+        .font_mono = jb,
     };
 }
 
 pub fn deinit(self: Theme) void {
     c.UnloadFont(self.font);
-    c.UnloadFont(self.font_bold);
-    c.UnloadFont(self.font_italic);
-    c.UnloadFont(self.font_mono);
 }

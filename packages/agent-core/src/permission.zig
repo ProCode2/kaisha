@@ -42,6 +42,17 @@ pub const PermissionGate = struct {
         return gate;
     }
 
+    /// Reset to default rules — clears any "always" overrides from prior sessions.
+    pub fn reset(self: *PermissionGate) void {
+        self.rule_count = 0;
+        self.shutting_down = false;
+        self.pending_response = null;
+        if (self.default_mode == .ask) {
+            self.addRule("read", .auto);
+            self.addRule("glob", .auto);
+        }
+    }
+
     /// Add or update a rule for a specific tool.
     pub fn addRule(self: *PermissionGate, name: []const u8, mode: PermissionMode) void {
         // Check if rule already exists — update it

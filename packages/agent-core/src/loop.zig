@@ -145,7 +145,7 @@ pub const AgentLoop = struct {
                 }
 
                 for (response.tool_calls) |call| {
-                    // Permission check — may block waiting for user approval
+                    // Permission check — per tool call
                     if (self.config.agent_server) |t| {
                         if (!t.checkPermission(call.function.name, call.function.arguments)) {
                             self.appendMessage(.{
@@ -258,6 +258,13 @@ pub const AgentLoop = struct {
             .content_ptr = if (text.len > 0) text.ptr else null,
             .content_len = text.len,
         } });
+    }
+
+    /// Reset conversation state — clears messages and queues. Used when a new client connects.
+    pub fn reset(self: *AgentLoop) void {
+        self.messages.clearRetainingCapacity();
+        self.steering_queue.clearRetainingCapacity();
+        self.followup_queue.clearRetainingCapacity();
     }
 
     pub fn deinit(self: *AgentLoop) void {

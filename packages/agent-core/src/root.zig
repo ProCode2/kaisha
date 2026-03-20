@@ -81,6 +81,9 @@ pub const LocalAgentClient = transport.LocalAgentClient;
 pub const websocket_server = @import("transports/websocket.zig");
 pub const WebSocketAgentServer = websocket_server.WebSocketTransport;
 
+pub const remote_client = @import("transports/remote_client.zig");
+pub const RemoteAgentClient = remote_client.RemoteAgentClient;
+
 test {
     @import("std").testing.refAllDecls(@This());
 }
