@@ -1,180 +1,159 @@
-# DVUI Integration Plan
+# DVUI Integration Plan (Revised)
 
-## Problem
+## Decision: DVUI replaces the entire UI layer
 
-raylib draws text as pixels. No text selection, no click-drag copy, no proper multiline input. Current workarounds:
-- Click-to-copy entire message (not real selection)
-- raygui's GuiTextBox (single-line, 256-byte buffer, no cursor control)
-- MdRenderer draws markdown but height estimation is hacky and can't be selected
-- Tool feed text overflows and can't be copied
+DVUI is a complete UI toolkit — layout, text with selection, input, scroll, buttons, menus, dialogs. Using it alongside Clay was overcomplicating things. DVUI replaces:
 
-## Solution: DVUI for text interaction
+- **Clay** — DVUI has `box()`, `scrollArea()`, layout with `.expand`, `.dir`
+- **Our renderer.zig** — DVUI renders via its raylib backend
+- **Our app.zig** — DVUI owns the window + main loop via `RaylibBackend.initWindow()`
+- **MdRenderer** — DVUI's `textLayout()` with `addText()` supports styled spans
+- **TextInput (raygui)** — DVUI's `textEntry()` with multiline, selection, clipboard
+- **scroll_area.zig** — DVUI's `scrollArea()`
+- **button.zig, pill_button.zig** — DVUI's `button()`
+- **screen.zig, Navigator** — DVUI state management
 
-[DVUI](https://github.com/david-vanderson/dvui) is a Zig-native immediate-mode GUI toolkit with:
-- `TextLayoutWidget` — rich text display with click-drag selection, word/line select
-- `TextEntryWidget` — single + multiline input with selection, cursor, undo
-- Raylib backend (uses raylib for rendering — works with our existing window)
-- Zig 0.15 compatible, 3.3K commits, actively maintained
+## What stays
 
-## Architecture decision: DVUI alongside Clay, not replacing it
+- **agent-core** — unchanged, UI-independent
+- **boxes package** — unchanged, UI-independent
+- **secrets-proxy** — unchanged
+- **Theme colors** — ported to DVUI theme
 
-Clay handles page-level layout (header, body, sidebar, input bar). DVUI handles text interaction within Clay-computed bounding boxes. This is the minimal change — we don't rewrite the layout system.
+## DVUI API overview (from examples)
 
-```
-Clay layout (page structure)
-├── Header (Clay)
-├── Messages scroll area (Clay position → DVUI TextLayoutWidget per message)
-├── Tool feed (Clay position → DVUI TextLayoutWidget for outputs)
-├── Input bar (Clay position → DVUI TextEntryWidget)
-└── Sidebar (Clay)
-```
-
-DVUI runs in "sub-frame" mode within each Clay-computed region. `dvui.begin()` / `dvui.end()` scope per widget, not per frame.
-
-## What DVUI replaces
-
-| Current | Replacement |
-|---|---|
-| `MdRenderer.draw()` (raylib DrawTextEx) | `dvui.TextLayoutWidget` with styled spans |
-| `TextInput` (raygui GuiTextBox) | `dvui.TextEntryWidget` (multiline, selection) |
-| Click-to-copy hack | Native text selection + Ctrl+C |
-| `content_preview.draw()` | `dvui.TextLayoutWidget` |
-| `estimateMarkdownHeight()` | DVUI computes actual height |
-
-## What stays on Clay
-
-- Page layout (root, header, body, chat_col, input_bar)
-- Buttons (back, secrets, send) — Clay hover + click
-- Scroll containers — Clay manages scroll
-- Tool feed structure — Clay layout, DVUI for text content
-- Secrets panel structure — Clay layout
-
-## Integration approach
-
-### Step 1: Add DVUI dependency
-
-```sh
-zig fetch --save git+https://github.com/david-vanderson/dvui
-```
-
-DVUI has a raylib backend. Add to sukue's build.zig:
 ```zig
-const dvui_dep = b.dependency("dvui", .{ .target = target, .optimize = optimize });
-sukue_mod.addImport("dvui", dvui_dep.module("dvui_raylib"));
-```
-
-### Step 2: Initialize DVUI in App
-
-DVUI needs its own init/deinit alongside Clay. In `app.zig`:
-```zig
-// In App.init():
-var dvui_backend = dvui.backend.init(window, allocator);
-
-// In App.run() per frame:
-// After Clay render, before EndDrawing:
-dvui_backend.newFrame();
-// ... DVUI widgets drawn here (in drawLegacy phase) ...
-dvui_backend.render();
-```
-
-DVUI's raylib backend hooks into the existing raylib window — no separate window needed.
-
-### Step 3: Replace TextInput with DVUI TextEntryWidget
-
-In `drawLegacy`, at the Clay-computed input position:
-```zig
-const bb = clay.getElementData(clay.ElementId.ID("text_input")).bounding_box;
-// Use DVUI TextEntryWidget at (bb.x, bb.y, bb.width, bb.height)
-var text_entry = dvui.textEntry(.{
-    .rect = .{ .x = bb.x, .y = bb.y, .w = bb.width, .h = bb.height },
+// Window + main loop
+var backend = try RaylibBackend.initWindow(.{
+    .gpa = allocator,
+    .size = .{ .w = 800, .h = 600 },
+    .title = "Kaisha",
 });
-// text_entry handles cursor, selection, multiline, clipboard natively
+var win = try dvui.Window.init(@src(), allocator, backend.backend(), .{});
+
+// Frame loop
+while (true) {
+    c.BeginDrawing();
+    const nstime = win.beginWait(true);
+    try win.begin(nstime);
+    try backend.addAllEvents(&win);
+    backend.clear();
+
+    // --- UI declaration ---
+    myAppFrame();
+
+    const end_micros = try win.end(.{});
+    backend.setCursor(win.cursorRequested());
+    backend.EndDrawingWaitEventTimeout(win.waitTime(end_micros));
+}
+
+// Layout
+var vbox = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+defer vbox.deinit();
+
+// Scroll
+var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
+defer scroll.deinit();
+
+// Text with selection
+var tl = dvui.textLayout(@src(), .{}, .{ .expand = .horizontal });
+tl.addText("Hello **world**", .{});  // can add styled spans
+tl.deinit();
+
+// Button
+if (dvui.button(@src(), "Send", .{}, .{})) { ... }
+
+// Text input
+var buf: [256]u8 = ...;
+_ = dvui.textEntry(@src(), .{ .text = &buf }, .{});
 ```
-
-### Step 4: Replace MdRenderer with DVUI TextLayoutWidget
-
-For each message in `drawLegacy`:
-```zig
-const bb = clay.getElementData(clay.ElementId.IDI("msg", i)).bounding_box;
-var tl = dvui.textLayout(.{
-    .rect = .{ .x = bb.x, .y = bb.y, .w = bb.width, .h = bb.height },
-});
-// Parse markdown → add styled spans to TextLayout
-// tl.addText("Hello ", .{ .font_style = .bold });
-// tl.addText("world", .{});
-// Selection + copy handled automatically by DVUI
-```
-
-### Step 5: Feed DVUI actual rendered height back to Clay
-
-DVUI's TextLayoutWidget knows the actual rendered height. Feed this back for next frame's Clay layout:
-```zig
-// Store rendered heights per message
-self.msg_heights[i] = tl.getContentHeight();
-
-// In Clay layout phase:
-clay.UI()(.{
-    .id = clay.ElementId.IDI("msg", i),
-    .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(self.msg_heights[i]) } },
-})({});
-```
-
-This replaces the hacky `estimateMarkdownHeight()` with actual measured heights (1 frame delay, imperceptible at 60fps).
-
-### Step 6: Replace tool feed text with DVUI
-
-Tool output and command previews use `content_preview.draw()` and `diff_view.draw()`. Replace with DVUI TextLayoutWidget for selectable output text.
-
-## Key questions to verify before committing
-
-1. **Does DVUI TextLayoutWidget support clipboard copy on read-only text?** — Test with a simple prototype
-2. **Can DVUI run in "region" mode?** — Render only within a specific rectangle (Clay's bounding box), not full-screen
-3. **Does DVUI's raylib backend conflict with Clay's raylib rendering?** — Both draw to the same framebuffer
-4. **How does DVUI handle input focus?** — Multiple TextEntryWidgets + TextLayoutWidgets need coordinated focus
 
 ## Implementation phases
 
-### Phase 1: Prototype (verify it works)
-- Add DVUI dependency
-- Initialize DVUI backend in App
-- Replace ONE message with DVUI TextLayoutWidget
-- Test: can you select text? Copy with Ctrl+C?
-- If yes → proceed. If no → stop and evaluate TUI alternative.
+### Phase 1: Minimal DVUI app with raylib backend
+- Wire DVUI into build.zig (backend=raylib)
+- Create a simple main.zig that opens a DVUI window
+- Render "Hello world" with textLayout — verify text selection works
+- **Goal: prove the dependency works with Zig 0.15**
 
-### Phase 2: Text input migration
-- Replace raygui TextInput with DVUI TextEntryWidget
-- Multiline support, proper cursor, selection
-- Delete old text_input.zig
+### Phase 2: Port box list screen
+- Replace box_list.zig Clay layout with DVUI
+- Use dvui.box for layout, dvui.button for actions
+- dvui.textEntry for box name input
+- **Goal: functional box list in DVUI**
 
-### Phase 3: Message rendering migration
-- Replace all messages with DVUI TextLayoutWidget
-- Parse markdown → styled spans
-- Remove MdRenderer dependency
-- Remove estimateMarkdownHeight hack
-- DVUI provides actual heights → feed back to Clay
+### Phase 3: Port chat screen
+- Replace chat.zig Clay layout with DVUI
+- Messages as dvui.textLayout (selectable!)
+- Input as dvui.textEntry (multiline, clipboard)
+- Scroll area for messages
+- Tool feed as DVUI widgets
+- **Goal: fully functional chat in DVUI with text selection**
 
-### Phase 4: Tool feed text migration
-- Replace content_preview and diff_view text with DVUI
-- Selectable tool output
+### Phase 4: Markdown rendering
+- Parse markdown content → styled spans via addText()
+- Bold, italic, code, headings via DVUI font styles
+- Code blocks with background color
+- **Goal: markdown renders with proper styling and is selectable**
 
-### Phase 5: Cleanup
-- Remove unused sukue components (text.zig, content_preview.zig, md/renderer.zig, text_input.zig)
-- Remove raygui dependency if nothing else uses it
+### Phase 5: Clean up sukue
+- Remove Clay dependency
+- Remove old renderer.zig, app.zig, screen.zig
+- sukue becomes thin: theme + DVUI re-export
+- Or remove sukue entirely — kaisha imports DVUI directly
+
+## Build integration
+
+DVUI with raylib backend. From DVUI's build.zig, the `raylib` backend:
+- Bundles its own raylib (downloads + compiles)
+- Includes raygui
+- We remove our homebrew raylib dependency — DVUI manages it
+
+```zig
+// build.zig
+const dvui_dep = b.dependency("dvui", .{
+    .target = target,
+    .optimize = optimize,
+    .backend = .raylib,
+});
+
+const exe = b.addExecutable(.{
+    .name = "kaisha",
+    .root_module = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .imports = &.{
+            .{ .name = "dvui", .module = dvui_dep.module("dvui_raylib") },
+            .{ .name = "raylib-backend", .module = dvui_dep.module("raylib") },
+            .{ .name = "agent_core", .module = agent_core_mod },
+            .{ .name = "boxes", .module = boxes_mod },
+        },
+    }),
+});
+```
+
+## Theme
+
+Port kaisha's colors to DVUI's theme system:
+```zig
+var theme = dvui.Theme.builtin.adwaita_dark;
+// Override colors to match kaisha's palette
+theme.bg = dvui.Color.fromRgba(30, 30, 40, 255);
+// etc.
+```
+
+## What kaisha gains
+
+- **Text selection** — click-drag on any message, Ctrl+C to copy
+- **Proper text input** — multiline, cursor movement, undo, selection
+- **No height estimation hacks** — DVUI knows actual rendered height
+- **No triple-stack** — one UI system instead of Clay + sukue + raylib
+- **Menus, dialogs** — DVUI has them built in
+- **Accessibility** — DVUI has accesskit integration
+- **Variable framerate** — DVUI only re-renders when needed (saves CPU)
 
 ## Risks
 
-1. **DVUI + Clay + raylib triple-stack** — Three systems rendering to the same framebuffer. Order matters: Clay renders first (backgrounds, borders), then DVUI renders text on top. Should work since DVUI's raylib backend is just DrawTextEx calls internally.
-
-2. **Input focus conflicts** — Clay's click detection (pointerOver) and DVUI's input handling may fight over mouse events. May need to disable Clay's pointer handling for regions where DVUI widgets are active.
-
-3. **Performance** — DVUI recomputes text layout every frame (immediate mode). For long chat histories (100+ messages), this could be slow. May need to virtualize (only render visible messages).
-
-4. **DVUI API instability** — Active development means API could change. Pin to a specific commit.
-
-## Dependencies
-
-```
-dvui (zig package) — text interaction
-clay-zig (existing) — page layout
-raylib (existing) — rendering backend for both Clay and DVUI
-```
+1. **DVUI raylib backend maturity** — less tested than SDL backend. May hit edge cases.
+2. **Custom rendering** — tool feed's diff view and colored status dots need custom DVUI widgets or raw raylib draws interleaved.
+3. **Font rendering** — DVUI uses FreeType by default with raylib. Need to verify JetBrains Mono works.
+4. **Binary size** — FreeType adds ~1MB. Acceptable.

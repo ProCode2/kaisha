@@ -70,6 +70,34 @@ pub fn build(b: *std.Build) void {
     const server_step = b.step("server", "Build and run kaisha-server");
     server_step.dependOn(&server_run.step);
 
+    // --- DVUI prototype (separate from main app) ---
+    if (is_native_macos) {
+        const dvui_dep = b.dependency("dvui", .{
+            .target = target,
+            .optimize = optimize,
+            .backend = .raylib,
+        });
+
+        const dvui_test_exe = b.addExecutable(.{
+            .name = "dvui-test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/dvui_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "dvui", .module = dvui_dep.module("dvui_raylib") },
+                    .{ .name = "raylib-backend", .module = dvui_dep.module("raylib") },
+                },
+            }),
+        });
+        b.installArtifact(dvui_test_exe);
+
+        const dvui_test_run = b.addRunArtifact(dvui_test_exe);
+        dvui_test_run.step.dependOn(b.getInstallStep());
+        const dvui_test_step = b.step("dvui-test", "Run DVUI prototype");
+        dvui_test_step.dependOn(&dvui_test_run.step);
+    }
+
     // --- kaisha desktop (UI + agent — macOS/native only) ---
     if (is_native_macos) {
         const sukue_mod = b.addModule("sukue", .{
