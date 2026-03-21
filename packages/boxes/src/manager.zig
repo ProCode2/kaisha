@@ -181,7 +181,10 @@ pub const BoxManager = struct {
         defer parsed.deinit();
 
         var config = BoxConfig{};
-        if (parsed.value.name) |n| config.name = self.allocator.dupe(u8, n) catch name;
+        config.name = if (parsed.value.name) |n|
+            self.allocator.dupe(u8, n) catch self.allocator.dupe(u8, name) catch name
+        else
+            self.allocator.dupe(u8, name) catch name;
         if (parsed.value.box_type) |t| {
             if (std.mem.eql(u8, t, "docker")) config.box_type = .docker
             else if (std.mem.eql(u8, t, "local")) config.box_type = .local

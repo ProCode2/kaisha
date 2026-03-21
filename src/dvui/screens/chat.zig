@@ -52,7 +52,7 @@ pub fn frame() bool {
 
         // Chat column
         {
-            var chat_col = dvui.box(@src(), .{}, .{ .expand = .both });
+            var chat_col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
             defer chat_col.deinit();
 
             // Messages
