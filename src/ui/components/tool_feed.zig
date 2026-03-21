@@ -97,7 +97,9 @@ pub const ToolFeed = struct {
         var content_h: c_int = 0;
         for (0..self.count) |i| content_h += entryHeight(&self.entries[i]);
 
-        const panel_h = @min(content_h + PAD * 3, MAX_HEIGHT);
+        // Cap panel to available space (between header at y=60 and input)
+        const available = bottom_y - GAP_FROM_INPUT - 60;
+        const panel_h = @min(content_h + PAD * 3, @min(MAX_HEIGHT, available));
         const panel_y = bottom_y - panel_h - GAP_FROM_INPUT;
         // Panel background + top border
         c.DrawRectangleRounded(

@@ -16,6 +16,7 @@ const skills_mod = @import("skills.zig");
 
 /// Default system prompt embedded at compile time.
 const DEFAULT_SYSTEM_PROMPT = @embedFile("prompt/system.md");
+const MEMORY_PROMPT = @embedFile("prompt/memory.md");
 
 /// Agent loop configuration.
 pub const LoopConfig = struct {
@@ -68,6 +69,7 @@ pub const AgentLoop = struct {
         // Use provided prompt, or fall back to built-in default
         const base_prompt = config.system_prompt orelse DEFAULT_SYSTEM_PROMPT;
         system_parts.append(allocator, base_prompt) catch {};
+        system_parts.append(allocator, MEMORY_PROMPT) catch {};
 
         if (config.load_context_files) {
             const ctx = context_mod.loadContextFiles(allocator, config.cwd_ptr.*);
@@ -86,6 +88,12 @@ pub const AgentLoop = struct {
                 sw.print("- **{s}**: invoke with /skill:{s}\n", .{ skill.name, skill.name }) catch {};
             }
             system_parts.append(allocator, skill_prompt.toOwnedSlice(allocator) catch "") catch {};
+        }
+
+        // Load persistent memory files (.kaisha/memory/*.md)
+        const memory_content = loadMemoryFiles(allocator, config.cwd_ptr.*);
+        if (memory_content.len > 0) {
+            system_parts.append(allocator, memory_content) catch {};
         }
 
         // Append extra system prompt (e.g. secrets list)
@@ -316,8 +324,41 @@ pub const AgentLoop = struct {
     }
 
     pub fn deinit(self: *AgentLoop) void {
+
         self.messages.deinit(self.config.allocator);
         self.steering_queue.deinit(self.config.allocator);
         self.followup_queue.deinit(self.config.allocator);
     }
 };
+
+/// Load all .md files from .kaisha/memory/ and concatenate as persistent memory.
+fn loadMemoryFiles(allocator: std.mem.Allocator, cwd: []const u8) []const u8 {
+    var memory_path_buf: [512]u8 = .{0} ** 512;
+    const memory_path = std.fmt.bufPrint(&memory_path_buf, "{s}/.kaisha/memory", .{cwd}) catch return "";
+    memory_path_buf[memory_path.len] = 0;
+
+    var dir = std.fs.openDirAbsolute(memory_path_buf[0..memory_path.len :0], .{ .iterate = true }) catch return "";
+    defer dir.close();
+
+    var parts = std.ArrayListUnmanaged([]const u8).empty;
+    defer parts.deinit(allocator);
+
+    // Header
+    parts.append(allocator, "\n## Persistent Memory\nThese are your memory files from .kaisha/memory/. Read and update them as needed.\n") catch {};
+
+    var iter = dir.iterate();
+    while (iter.next() catch null) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".md")) continue;
+
+        const content = dir.readFileAlloc(allocator, entry.name, 512 * 1024) catch continue;
+        var header_buf = std.ArrayListUnmanaged(u8).empty;
+        const hw = header_buf.writer(allocator);
+        hw.print("\n### {s}\n", .{entry.name}) catch continue;
+        hw.writeAll(content) catch continue;
+        parts.append(allocator, header_buf.toOwnedSlice(allocator) catch continue) catch {};
+    }
+
+    if (parts.items.len <= 1) return ""; // only header, no files
+    return std.mem.join(allocator, "\n", parts.items) catch "";
+}

@@ -53,6 +53,9 @@ pub const AnthropicProvider = anthropic.AnthropicProvider;
 pub const jsonl = @import("storage/jsonl.zig");
 pub const JsonlStorage = jsonl.JsonlStorage;
 
+pub const history = @import("history.zig");
+pub const HistoryManager = history.HistoryManager;
+
 pub const session = @import("session.zig");
 pub const SessionManager = session.SessionManager;
 
