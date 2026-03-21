@@ -5,7 +5,6 @@ const dvui = @import("dvui");
 /// Supports: headings (#), bold (**), italic (*), inline code (`),
 /// code blocks (```), unordered lists (- *), ordered lists (1.),
 /// and links [text](url).
-const emoji_font = dvui.Font.find(.{ .family = "Noto Emoji" });
 
 pub fn render(tl: *dvui.TextLayoutWidget, text: []const u8, base_color: dvui.Color) void {
     var lines = std.mem.splitScalar(u8, text, '\n');
