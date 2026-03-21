@@ -14,6 +14,7 @@ pub const DockerBox = struct {
     allocator: std.mem.Allocator,
     config: BoxConfig,
     container_name: []const u8,
+    auth_token: []const u8 = "",
     host_port: u16 = 0,
     event_queue: EventQueue = .{},
     remote_client: ?*RemoteAgentClient = null,
@@ -35,10 +36,14 @@ pub const DockerBox = struct {
         const db = try allocator.create(DockerBox);
         const name = try std.fmt.allocPrint(allocator, "kaisha-box-{s}", .{config.name});
 
+        // Generate auth token
+        const token = try generateToken(allocator);
+
         db.* = DockerBox{
             .allocator = allocator,
             .config = config,
             .container_name = name,
+            .auth_token = token,
             .status = .starting,
         };
 
@@ -119,16 +124,12 @@ pub const DockerBox = struct {
     }
 
     fn startContainer(self: *DockerBox) !void {
-        // Check if container already exists (stopped)
+        // Remove any existing container — we always create fresh with a new auth token.
+        // Workspace data persists via the volume mount.
         const inspect = runDockerCmd(self.allocator, &.{ "docker", "inspect", self.container_name });
         if (inspect == 0) {
-            std.debug.print("[DockerBox] Container exists, restarting...\n", .{});
-            const start = runDockerCmd(self.allocator, &.{ "docker", "start", self.container_name });
-            if (start != 0) {
-                std.debug.print("[DockerBox] Failed to start existing container\n", .{});
-                return error.ContainerStartFailed;
-            }
-            return;
+            std.debug.print("[DockerBox] Removing old container...\n", .{});
+            _ = runDockerCmd(self.allocator, &.{ "docker", "rm", "-f", self.container_name });
         }
 
         // Create new container
@@ -136,11 +137,21 @@ pub const DockerBox = struct {
         const volume_arg = try std.fmt.allocPrint(self.allocator, "{s}:/workspace", .{workspace});
         defer self.allocator.free(volume_arg);
 
-        std.debug.print("[DockerBox] docker run -d --name {s} -v {s} -p 0:8420 kaisha-server\n", .{ self.container_name, volume_arg });
+        const auth_env = try std.fmt.allocPrint(self.allocator, "AUTH_TOKEN={s}", .{self.auth_token});
+        defer self.allocator.free(auth_env);
+
+        // Pass API key from host to container
+        const api_key = std.process.getEnvVarOwned(self.allocator, "LYZR_API_KEY") catch self.allocator.dupe(u8, "") catch "";
+        const api_env = try std.fmt.allocPrint(self.allocator, "LYZR_API_KEY={s}", .{api_key});
+        defer self.allocator.free(api_env);
+
+        std.debug.print("[DockerBox] docker run -d --name {s} -v {s} -e AUTH_TOKEN=*** -p 0:8420 kaisha-server\n", .{ self.container_name, volume_arg });
         const result = runDockerCmd(self.allocator, &.{
             "docker", "run", "-d",
             "--name",    self.container_name,
             "-v",        volume_arg,
+            "-e",        auth_env,
+            "-e",        api_env,
             "-p",        "0:8420",
             "kaisha-server",
         });
@@ -178,6 +189,16 @@ pub const DockerBox = struct {
                 continue;
             };
             std.debug.print("[DockerBox] Connected on attempt {d}\n", .{attempts + 1});
+
+            // Send auth token
+            if (self.auth_token.len > 0) {
+                var auth_buf = std.ArrayListUnmanaged(u8).empty;
+                defer auth_buf.deinit(self.allocator);
+                const w = auth_buf.writer(self.allocator);
+                w.print("{{\"type\":\"auth\",\"token\":\"{s}\"}}", .{self.auth_token}) catch return;
+                self.remote_client.?.wsSend(auth_buf.items);
+                std.debug.print("[DockerBox] Auth token sent\n", .{});
+            }
             return;
         }
         std.debug.print("[DockerBox] Connection timeout after 10 attempts\n", .{});
@@ -241,9 +262,31 @@ pub const DockerBox = struct {
         rc.wsSend(buf.items);
     }
 
-    fn getHistoryImpl(_: *anyopaque, _: std.mem.Allocator) []Message {
-        // Docker box history lives inside the container — fresh from client perspective
-        return &.{};
+    fn getHistoryImpl(ctx: *anyopaque, allocator: std.mem.Allocator) []Message {
+        const self: *DockerBox = @ptrCast(@alignCast(ctx));
+        // Load from mounted workspace — history is persisted via volume
+        // workspacePath uses self.allocator, so free with self.allocator
+        const workspace = self.workspacePath() catch |err| {
+            std.debug.print("[DockerBox] getHistory: workspacePath failed: {}\n", .{err});
+            return &.{};
+        };
+        defer self.allocator.free(workspace);
+
+        var kaisha_path_buf: [512]u8 = .{0} ** 512;
+        const kp = std.fmt.bufPrint(&kaisha_path_buf, "{s}/.kaisha", .{workspace}) catch return &.{};
+        kaisha_path_buf[kp.len] = 0;
+
+        std.debug.print("[DockerBox] getHistory: loading from {s}\n", .{kaisha_path_buf[0..kp.len]});
+
+        var hm = agent_core.HistoryManager.init(allocator, kaisha_path_buf[0..kp.len :0]) orelse {
+            std.debug.print("[DockerBox] getHistory: HistoryManager init failed\n", .{});
+            return &.{};
+        };
+        defer hm.deinit();
+        const storage = hm.storage();
+        const msgs = storage.load(allocator);
+        std.debug.print("[DockerBox] getHistory: loaded {d} messages\n", .{msgs.len});
+        return msgs;
     }
 
     fn shutdownImpl(ctx: *anyopaque) void {
@@ -269,6 +312,18 @@ fn runDockerCmd(allocator: std.mem.Allocator, argv: []const []const u8) u8 {
         .Exited => |code| code,
         else => 1,
     };
+}
+
+fn generateToken(allocator: std.mem.Allocator) ![]const u8 {
+    var bytes: [16]u8 = undefined;
+    std.crypto.random.bytes(&bytes);
+    const hex = try allocator.alloc(u8, 32);
+    const charset = "0123456789abcdef";
+    for (bytes, 0..) |b, i| {
+        hex[i * 2] = charset[b >> 4];
+        hex[i * 2 + 1] = charset[b & 0x0f];
+    }
+    return hex;
 }
 
 fn runDockerCmdOutput(allocator: std.mem.Allocator, argv: []const []const u8) ?[]const u8 {

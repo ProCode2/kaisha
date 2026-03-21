@@ -11,17 +11,22 @@ const g_allocator = std.heap.page_allocator;
 // Shared state
 var ws_server: WebSocketAgentServer = undefined;
 var runtime: AgentRuntime = undefined;
+var auth_token: ?[]const u8 = null;
 
 pub fn main() !void {
     const port: u16 = 8420;
 
-    // Unified runtime — same setup as local mode
+    // Token auth — if AUTH_TOKEN is set, require it
+    auth_token = std.process.getEnvVarOwned(g_allocator, "AUTH_TOKEN") catch null;
+
+    // Unified runtime
     ws_server = WebSocketAgentServer.init(g_allocator);
     runtime = AgentRuntime.init(g_allocator);
     runtime.setup(ws_server.agentServer());
     agent_setup.setGlobalRuntime(&runtime);
 
     std.debug.print("kaisha-server starting on port {d}...\n", .{port});
+    if (auth_token != null) std.debug.print("Auth token required\n", .{});
     std.debug.print("kaisha-server listening on ws://0.0.0.0:{d}\n", .{port});
 
     var server = try ws.Server(Handler).init(g_allocator, .{
@@ -37,6 +42,7 @@ pub fn main() !void {
 const Handler = struct {
     wst: *WebSocketAgentServer,
     conn: *ws.Conn,
+    authenticated: bool = false,
 
     pub fn init(_: *ws.Handshake, conn: *ws.Conn, wst: *WebSocketAgentServer) !Handler {
         std.debug.print("Client connected\n", .{});
@@ -50,19 +56,51 @@ const Handler = struct {
             }
         }.write);
 
-        return .{ .wst = wst, .conn = conn };
+        var handler = Handler{ .wst = wst, .conn = conn };
+
+        // No token required — auto-authenticate
+        if (auth_token == null) {
+            handler.authenticated = true;
+        }
+
+        return handler;
     }
 
     pub fn clientMessage(self: *Handler, msg: []const u8) !void {
         const CommandJson = struct {
             type: ?[]const u8 = null,
             content: ?[]const u8 = null,
+            token: ?[]const u8 = null,
         };
 
         const parsed = std.json.parseFromSlice(CommandJson, g_allocator, msg, .{ .ignore_unknown_fields = true }) catch return;
         defer parsed.deinit();
 
         const cmd_type = parsed.value.type orelse return;
+
+        // Auth check — first message must be auth if token is set
+        if (!self.authenticated) {
+            if (std.mem.eql(u8, cmd_type, "auth")) {
+                if (parsed.value.token) |token| {
+                    if (auth_token) |expected| {
+                        if (std.mem.eql(u8, token, expected)) {
+                            self.authenticated = true;
+                            std.debug.print("Client authenticated\n", .{});
+                            self.conn.write("{\"type\":\"auth_ok\"}") catch {};
+                            return;
+                        }
+                    }
+                }
+                std.debug.print("Client auth failed\n", .{});
+                self.conn.write("{\"type\":\"auth_error\"}") catch {};
+                return;
+            } else {
+                // Not auth message — reject
+                std.debug.print("Client not authenticated, rejecting\n", .{});
+                self.conn.write("{\"type\":\"auth_error\",\"content\":\"auth required\"}") catch {};
+                return;
+            }
+        }
 
         if (std.mem.eql(u8, cmd_type, "message")) {
             if (parsed.value.content) |content| {

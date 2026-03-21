@@ -119,27 +119,27 @@ pub const ToolFeed = struct {
             1.0, theme.border,
         );
 
-        // Scroll
+        // Scroll — scroll_target 0 = bottom visible (default), negative = scrolled up
         const mx = c.GetMouseX();
         const my = c.GetMouseY();
         var consumed_scroll = false;
         if (mx >= x and mx <= x + width and my >= panel_y and my <= panel_y + panel_h) {
-            self.scroll_target += wheel_delta * 30.0;
+            self.scroll_target -= wheel_delta * 30.0;
             if (wheel_delta != 0) consumed_scroll = true;
         }
         self.scroll_y += (self.scroll_target - self.scroll_y) * 0.2;
         const overflow = content_h + PAD * 2 - panel_h;
         if (overflow > 0) {
+            const max_scroll: f32 = @floatFromInt(overflow);
             if (self.scroll_target < 0) self.scroll_target = 0;
-            if (self.scroll_target > @as(f32, @floatFromInt(overflow))) self.scroll_target = @floatFromInt(overflow);
+            if (self.scroll_target > max_scroll) self.scroll_target = max_scroll;
         } else {
             self.scroll_target = 0;
         }
         if (self.scroll_y < 0) self.scroll_y = 0;
 
-        // Content layout (bottom-anchored)
-        var content_start = bottom_y - GAP_FROM_INPUT - PAD - content_h;
-        content_start += @as(c_int, @intFromFloat(self.scroll_y));
+        // Content layout — draw top-down inside the panel
+        const content_start = panel_y + PAD - @as(c_int, @intFromFloat(self.scroll_y));
 
         c.BeginScissorMode(x, panel_y, width, panel_h);
         var draw_y = content_start;

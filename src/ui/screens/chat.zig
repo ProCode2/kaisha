@@ -2,6 +2,7 @@ const std = @import("std");
 const sukue = @import("sukue");
 const c = sukue.c;
 const TextInput = sukue.TextInput;
+const MdRenderer = sukue.MdRenderer;
 const clay = sukue.clay;
 const ChatBubble = @import("../components/chat_bubble.zig");
 
@@ -185,17 +186,16 @@ pub fn layout(self: *ChatScreen, ctx: *const FrameContext) void {
                 })({
                     for (self.messages.items, 0..) |m, i| {
                         if (m.content) |content| {
-                            const is_user = m.role == .user;
-                            const msg_color = if (is_user) theme.user_color else theme.assistant_color;
+                            // Estimate height for Clay layout — MdRenderer draws on top in drawLegacy.
+                            // Height estimate: count newlines + word-wrap at ~80 chars/line.
+                            const est_h = estimateMarkdownHeight(content, @intFromFloat(theme.font_body));
                             clay.UI()(.{
                                 .id = clay.ElementId.IDI("msg", @intCast(i)),
-                                .layout = .{ .sizing = .{ .w = .grow }, .padding = .{ .left = 10, .top = 4, .bottom = 4 } },
-                            })({
-                                clay.text(content, .{
-                                    .font_size = @intFromFloat(theme.font_body),
-                                    .color = colorToClay(msg_color),
-                                });
-                            });
+                                .layout = .{
+                                    .sizing = .{ .w = .grow, .h = .fixed(est_h) },
+                                    .padding = .{ .left = 10, .top = 4, .bottom = 4 },
+                                },
+                            })({});
                         }
                     }
                 });
@@ -318,6 +318,29 @@ pub fn drawLegacy(self: *ChatScreen, ctx: *const FrameContext) void {
         }
     }
 
+    // Render markdown on top of Clay text placeholders
+    for (self.messages.items, 0..) |m, i| {
+        if (m.content) |content| {
+            const msg_data = clay.getElementData(clay.ElementId.IDI("msg", @intCast(i)));
+            if (msg_data.found) {
+                const bb = msg_data.bounding_box;
+                const is_user = m.role == .user;
+                const color = if (is_user) theme.user_color else theme.assistant_color;
+                const md = MdRenderer{
+                    .allocator = self.allocator,
+                    .txt = content,
+                    .x = @intFromFloat(bb.x + 10),
+                    .y = @intFromFloat(bb.y + 4),
+                    .font_size = theme.font_body,
+                    .max_width = @intFromFloat(bb.width - 20),
+                    .color = color,
+                    .theme = theme,
+                };
+                _ = md.draw();
+            }
+        }
+    }
+
     // Click to copy on message bubbles
     if (c.IsMouseButtonPressed(c.MOUSE_BUTTON_LEFT)) {
         for (self.messages.items, 0..) |m, i| {
@@ -336,6 +359,28 @@ pub fn drawLegacy(self: *ChatScreen, ctx: *const FrameContext) void {
     }
 
     ChatBubble.drawToast(theme);
+}
+
+fn estimateMarkdownHeight(content: []const u8, font_size: c_int) f32 {
+    if (content.len == 0) return @floatFromInt(font_size + 8);
+    const line_h: f32 = @floatFromInt(font_size + 4);
+    const chars_per_line: usize = 80; // rough estimate for word-wrap
+
+    var lines: usize = 1;
+    var col: usize = 0;
+    for (content) |ch| {
+        if (ch == '\n') {
+            lines += 1;
+            col = 0;
+        } else {
+            col += 1;
+            if (col >= chars_per_line) {
+                lines += 1;
+                col = 0;
+            }
+        }
+    }
+    return @as(f32, @floatFromInt(lines)) * line_h + 12; // + padding
 }
 
 fn colorToClay(rc: c.Color) clay.Color {

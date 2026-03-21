@@ -190,18 +190,12 @@ pub const LocalBox = struct {
 
     fn getHistoryImpl(ctx: *anyopaque, allocator: std.mem.Allocator) []Message {
         const self: *LocalBox = @ptrCast(@alignCast(ctx));
-        var result = std.ArrayListUnmanaged(Message).empty;
-        for (self.agent.messages.items) |m| {
-            // Only user + assistant text messages — skip system, tool, and tool_call messages
-            if (m.role != .user and m.role != .assistant) continue;
-            const content = m.content orelse continue;
-            if (content.len == 0) continue;
-            result.append(allocator, Message{
-                .role = m.role,
-                .content = allocator.dupe(u8, content) catch null,
-            }) catch {};
+        // Load from disk (Storage vtable → HistoryManager) — stable, no dangling pointers.
+        // The agent's live message list has pointers into transient buffers that may be freed.
+        if (self.agent.config.storage) |storage| {
+            return storage.load(allocator);
         }
-        return result.toOwnedSlice(allocator) catch &.{};
+        return &.{};
     }
 
     fn shutdownImpl(ctx: *anyopaque) void {
