@@ -5,6 +5,7 @@ const Message = agent_core.Message;
 const app = @import("../app.zig");
 const tool_feed_mod = @import("../components/tool_feed.zig");
 const ToolFeed = tool_feed_mod.ToolFeed;
+const markdown = @import("../components/markdown.zig");
 const box_list = @import("box_list.zig");
 
 pub var tool_feed: ToolFeed = .{};
@@ -96,13 +97,20 @@ fn messageFrame(content: []const u8, is_user: bool, idx: usize) void {
     else
         dvui.Color{ .r = 200, .g = 200, .b = 210 };
 
-    // TODO: Replace with markdown rendering
     var tl = dvui.textLayout(@src(), .{}, .{
         .expand = .horizontal,
         .padding = .{ .x = 4, .y = 4, .h = 8 },
         .id_extra = @as(u16, @intCast(idx)),
     });
-    tl.addText(content, .{ .color_text = color });
+
+    if (is_user) {
+        // User messages: plain text, no markdown
+        tl.addText(content, .{ .color_text = color });
+    } else {
+        // Assistant messages: render markdown with styled spans
+        markdown.render(tl, content, color);
+    }
+
     tl.deinit();
 }
 

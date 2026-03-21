@@ -96,10 +96,11 @@ fn createForm() void {
         defer row.deinit();
 
         dvui.labelNoFmt(@src(), "Name: ", .{}, .{});
-        _ = dvui.textEntry(@src(), .{
+        var te = dvui.textEntry(@src(), .{
             .text = .{ .buffer = &create_name_buf },
             .placeholder = "my-project",
         }, .{ .expand = .horizontal });
+        te.deinit();
     }
 
     // Type
