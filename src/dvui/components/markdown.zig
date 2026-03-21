@@ -5,6 +5,8 @@ const dvui = @import("dvui");
 /// Supports: headings (#), bold (**), italic (*), inline code (`),
 /// code blocks (```), unordered lists (- *), ordered lists (1.),
 /// and links [text](url).
+const emoji_font = dvui.Font.find(.{ .family = "Noto Emoji" });
+
 pub fn render(tl: *dvui.TextLayoutWidget, text: []const u8, base_color: dvui.Color) void {
     var lines = std.mem.splitScalar(u8, text, '\n');
     var in_code_block = false;
@@ -37,7 +39,7 @@ pub fn render(tl: *dvui.TextLayoutWidget, text: []const u8, base_color: dvui.Col
 
         // Headings
         if (std.mem.startsWith(u8, line, "### ")) {
-            renderInline(tl, line[4..], .{
+            renderInlineEmoji(tl, line[4..], .{
                 .font = dvui.Font.theme(.body).withWeight(.bold).larger(2),
                 .color_text = base_color,
             });
@@ -45,7 +47,7 @@ pub fn render(tl: *dvui.TextLayoutWidget, text: []const u8, base_color: dvui.Col
             continue;
         }
         if (std.mem.startsWith(u8, line, "## ")) {
-            renderInline(tl, line[3..], .{
+            renderInlineEmoji(tl, line[3..], .{
                 .font = dvui.Font.theme(.body).withWeight(.bold).larger(4),
                 .color_text = base_color,
             });
@@ -53,7 +55,7 @@ pub fn render(tl: *dvui.TextLayoutWidget, text: []const u8, base_color: dvui.Col
             continue;
         }
         if (std.mem.startsWith(u8, line, "# ")) {
-            renderInline(tl, line[2..], .{
+            renderInlineEmoji(tl, line[2..], .{
                 .font = dvui.Font.theme(.heading).larger(6),
                 .color_text = base_color,
             });
@@ -67,7 +69,7 @@ pub fn render(tl: *dvui.TextLayoutWidget, text: []const u8, base_color: dvui.Col
             tl.addText("  " ** 1, .{}); // base indent
             _ = indent;
             tl.addText("• ", .{ .color_text = base_color });
-            renderInline(tl, std.mem.trimLeft(u8, line[2..], " "), .{ .color_text = base_color });
+            renderInlineEmoji(tl, std.mem.trimLeft(u8, line[2..], " "), .{ .color_text = base_color });
             tl.addText("\n", .{});
             continue;
         }
@@ -77,7 +79,7 @@ pub fn render(tl: *dvui.TextLayoutWidget, text: []const u8, base_color: dvui.Col
             const indent_level = (line.len - trimmed.len) / 2;
             for (0..indent_level) |_| tl.addText("  ", .{});
             tl.addText("• ", .{ .color_text = base_color });
-            renderInline(tl, trimmed[2..], .{ .color_text = base_color });
+            renderInlineEmoji(tl, trimmed[2..], .{ .color_text = base_color });
             tl.addText("\n", .{});
             continue;
         }
@@ -86,7 +88,7 @@ pub fn render(tl: *dvui.TextLayoutWidget, text: []const u8, base_color: dvui.Col
         if (line.len >= 3) {
             if (parseOrderedListPrefix(line)) |rest| {
                 tl.addText("  ", .{});
-                renderInline(tl, rest, .{ .color_text = base_color });
+                renderInlineEmoji(tl, rest, .{ .color_text = base_color });
                 tl.addText("\n", .{});
                 continue;
             }
@@ -103,7 +105,7 @@ pub fn render(tl: *dvui.TextLayoutWidget, text: []const u8, base_color: dvui.Col
         // Blockquote
         if (line.len >= 2 and line[0] == '>' and line[1] == ' ') {
             tl.addText("  | ", .{ .color_text = dvui.Color{ .r = 80, .g = 80, .b = 100 } });
-            renderInline(tl, line[2..], .{
+            renderInlineEmoji(tl, line[2..], .{
                 .color_text = dvui.Color{ .r = 170, .g = 170, .b = 190 },
                 .font = dvui.Font.theme(.body).withStyle(.italic),
             });
@@ -113,7 +115,7 @@ pub fn render(tl: *dvui.TextLayoutWidget, text: []const u8, base_color: dvui.Col
         if (line.len >= 1 and line[0] == '>') {
             tl.addText("  | ", .{ .color_text = dvui.Color{ .r = 80, .g = 80, .b = 100 } });
             const rest = if (line.len > 1) line[1..] else "";
-            renderInline(tl, rest, .{
+            renderInlineEmoji(tl, rest, .{
                 .color_text = dvui.Color{ .r = 170, .g = 170, .b = 190 },
                 .font = dvui.Font.theme(.body).withStyle(.italic),
             });
@@ -122,26 +124,26 @@ pub fn render(tl: *dvui.TextLayoutWidget, text: []const u8, base_color: dvui.Col
         }
 
         // Normal line — render inline formatting
-        renderInline(tl, line, .{ .color_text = base_color });
+        renderInlineEmoji(tl, line, .{ .color_text = base_color });
         tl.addText("\n", .{});
     }
 }
 
 /// Render a line with inline formatting: **bold**, *italic*, `code`, [link](url)
-fn renderInline(tl: *dvui.TextLayoutWidget, text: []const u8, base_opts: dvui.Options) void {
+fn renderInlineEmoji(tl: *dvui.TextLayoutWidget, text: []const u8, base_opts: dvui.Options) void {
     var i: usize = 0;
     var segment_start: usize = 0;
 
     while (i < text.len) {
         // Bold: **text**
         if (i + 1 < text.len and text[i] == '*' and text[i + 1] == '*') {
-            if (i > segment_start) tl.addText(text[segment_start..i], base_opts);
+            if (i > segment_start) addTextWithEmoji(tl, text[segment_start..i], base_opts);
             i += 2;
             const end = std.mem.indexOf(u8, text[i..], "**") orelse {
-                tl.addText(text[i..], base_opts);
+                addTextWithEmoji(tl, text[i..], base_opts);
                 return;
             };
-            tl.addText(text[i .. i + end], dvui.Options{
+            addTextWithEmoji(tl, text[i .. i + end], dvui.Options{
                 .font = dvui.Font.theme(.body).withWeight(.bold),
                 .color_text = base_opts.color_text,
             });
@@ -152,13 +154,13 @@ fn renderInline(tl: *dvui.TextLayoutWidget, text: []const u8, base_opts: dvui.Op
 
         // Italic: *text* (but not **)
         if (text[i] == '*' and (i + 1 >= text.len or text[i + 1] != '*')) {
-            if (i > segment_start) tl.addText(text[segment_start..i], base_opts);
+            if (i > segment_start) addTextWithEmoji(tl, text[segment_start..i], base_opts);
             i += 1;
             const end = std.mem.indexOfScalar(u8, text[i..], '*') orelse {
-                tl.addText(text[i..], base_opts);
+                addTextWithEmoji(tl, text[i..], base_opts);
                 return;
             };
-            tl.addText(text[i .. i + end], dvui.Options{
+            addTextWithEmoji(tl, text[i .. i + end], dvui.Options{
                 .font = dvui.Font.theme(.body).withStyle(.italic),
                 .color_text = dvui.Color{ .r = 180, .g = 200, .b = 220 },
             });
@@ -169,7 +171,7 @@ fn renderInline(tl: *dvui.TextLayoutWidget, text: []const u8, base_opts: dvui.Op
 
         // Inline code: `text`
         if (text[i] == '`') {
-            if (i > segment_start) tl.addText(text[segment_start..i], base_opts);
+            if (i > segment_start) addTextWithEmoji(tl, text[segment_start..i], base_opts);
             i += 1;
             const end = std.mem.indexOfScalar(u8, text[i..], '`') orelse {
                 tl.addText(text[i..], base_opts);
@@ -187,7 +189,7 @@ fn renderInline(tl: *dvui.TextLayoutWidget, text: []const u8, base_opts: dvui.Op
 
         // Link: [text](url)
         if (text[i] == '[') {
-            if (i > segment_start) tl.addText(text[segment_start..i], base_opts);
+            if (i > segment_start) addTextWithEmoji(tl, text[segment_start..i], base_opts);
             i += 1;
             const close_bracket = std.mem.indexOfScalar(u8, text[i..], ']') orelse {
                 segment_start = i - 1;
@@ -219,7 +221,7 @@ fn renderInline(tl: *dvui.TextLayoutWidget, text: []const u8, base_opts: dvui.Op
 
     // Remaining text
     if (segment_start < text.len) {
-        tl.addText(text[segment_start..], base_opts);
+        addTextWithEmoji(tl, text[segment_start..], base_opts);
     }
 }
 
@@ -239,6 +241,48 @@ fn parseOrderedListPrefix(line: []const u8) ?[]const u8 {
         return line[i + 2 ..];
     }
     return null;
+}
+
+/// Add text with automatic emoji font fallback.
+/// Splits text into runs of normal text and emoji, rendering each with the appropriate font.
+fn addTextWithEmoji(tl: *dvui.TextLayoutWidget, text: []const u8, opts: dvui.Options) void {
+    var i: usize = 0;
+    var seg_start: usize = 0;
+
+    while (i < text.len) {
+        const b = text[i];
+        if (b >= 0xF0 and i + 3 < text.len) {
+            // Flush preceding normal text
+            if (i > seg_start) {
+                tl.addText(text[seg_start..i], opts);
+            }
+            // Find end of emoji run (4-byte sequences + variation selectors)
+            const emoji_start = i;
+            while (i < text.len and text[i] >= 0xF0 and i + 3 < text.len) {
+                i += 4;
+                // Skip variation selectors (U+FE0F = 0xEF 0xB8 0x8F)
+                while (i + 2 < text.len and text[i] == 0xEF and text[i + 1] == 0xB8 and text[i + 2] == 0x8F) {
+                    i += 3;
+                }
+                // Skip zero-width joiners (U+200D = 0xE2 0x80 0x8D)
+                if (i + 2 < text.len and text[i] == 0xE2 and text[i + 1] == 0x80 and text[i + 2] == 0x8D) {
+                    i += 3;
+                }
+            }
+            // Render emoji with emoji font
+            tl.addText(text[emoji_start..i], dvui.Options{
+                .font = emoji_font,
+                .color_text = opts.color_text,
+            });
+            seg_start = i;
+        } else {
+            i += 1;
+        }
+    }
+    // Flush remaining normal text
+    if (seg_start < text.len) {
+        tl.addText(text[seg_start..], opts);
+    }
 }
 
 fn isHorizontalRule(line: []const u8) bool {

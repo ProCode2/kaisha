@@ -44,6 +44,7 @@ pub fn main() !void {
         .{ .family = dvui.Font.array("Inter"), .style = .italic, .bytes = @embedFile("fonts/Inter-Italic.ttf") },
         .{ .family = dvui.Font.array("Inter"), .weight = .bold, .style = .italic, .bytes = @embedFile("fonts/Inter-BoldItalic.ttf") },
         .{ .family = dvui.Font.array("JetBrains Mono"), .bytes = @embedFile("fonts/JetBrainsMono-Regular.ttf") },
+        .{ .family = dvui.Font.array("Noto Emoji"), .bytes = @embedFile("fonts/NotoEmoji-Regular.ttf") },
     };
     theme.font_body = .find(.{ .family = "Inter" });
     theme.font_heading = .find(.{ .family = "Inter", .weight = .bold });
