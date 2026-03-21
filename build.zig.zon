@@ -10,6 +10,10 @@
             .url = "git+https://github.com/johan0A/clay-zig-bindings?ref=v0.2.2+0.14#18cc9c148f02c3f00f824cc3a36db5030fd3de34",
             .hash = "zclay-0.2.2-Ej1rkJfRAABn4fTSKQ1Rn54ssdmyCsuBT3zjrdhSxTO4",
         },
+        .dvui = .{
+            .url = "git+https://github.com/david-vanderson/dvui#d1ce8c340932e579ce117a6df6f816dd36e57ba7",
+            .hash = "dvui-0.4.0-dev-AQFJmSK03wCEkitoCodZDbTMopqAL9Pw6HQchD8-OBuq",
+        },
     },
     .fingerprint = 0xf0abde267fe6e59c,
     .minimum_zig_version = "0.15.0",
