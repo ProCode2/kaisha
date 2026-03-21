@@ -25,9 +25,10 @@ pub fn main() !void {
     });
     defer backend.deinit();
 
-    // Kaisha dark theme
+    // Kaisha dark theme with JetBrains Mono + Inter fonts
     var theme = dvui.Theme.builtin.adwaita_dark;
     theme.name = "Kaisha Dark";
+    theme.dark = true;
     theme.fill = dvui.Color{ .r = 30, .g = 30, .b = 40 };
     theme.text = dvui.Color{ .r = 220, .g = 220, .b = 230 };
     theme.focus = dvui.Color{ .r = 100, .g = 180, .b = 255 };
@@ -35,6 +36,19 @@ pub fn main() !void {
     theme.text_select = dvui.Color{ .r = 45, .g = 85, .b = 140 };
     theme.window = .{ .fill = dvui.Color{ .r = 32, .g = 33, .b = 44 } };
     theme.control = .{ .fill = dvui.Color{ .r = 40, .g = 42, .b = 54 } };
+
+    // Fonts: Inter for body, JetBrains Mono for code
+    theme.embedded_fonts = &.{
+        .{ .family = dvui.Font.array("Inter"), .bytes = @embedFile("fonts/Inter-Regular.ttf") },
+        .{ .family = dvui.Font.array("Inter"), .weight = .bold, .bytes = @embedFile("fonts/Inter-Bold.ttf") },
+        .{ .family = dvui.Font.array("Inter"), .style = .italic, .bytes = @embedFile("fonts/Inter-Italic.ttf") },
+        .{ .family = dvui.Font.array("Inter"), .weight = .bold, .style = .italic, .bytes = @embedFile("fonts/Inter-BoldItalic.ttf") },
+        .{ .family = dvui.Font.array("JetBrains Mono"), .bytes = @embedFile("fonts/JetBrainsMono-Regular.ttf") },
+    };
+    theme.font_body = .find(.{ .family = "Inter" });
+    theme.font_heading = .find(.{ .family = "Inter", .weight = .bold });
+    theme.font_title = .find(.{ .family = "Inter", .size = dvui.Font.DefaultSize + 4 });
+    theme.font_mono = .find(.{ .family = "JetBrains Mono" });
 
     var win = try dvui.Window.init(@src(), gpa, backend.backend(), .{ .theme = theme });
     defer win.deinit();

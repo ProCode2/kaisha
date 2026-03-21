@@ -40,52 +40,69 @@ pub fn frame() bool {
             }
         }
 
-        // TODO: Secrets button
-    }
-
-    // Messages
-    {
-        var scroll = dvui.scrollArea(@src(), .{}, .{
-            .expand = .both,
-            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
-        });
-        defer scroll.deinit();
-
-        for (app.messages.items, 0..) |m, i| {
-            if (m.content) |content| {
-                messageFrame(content, m.role == .user, i);
-            }
+        if (dvui.button(@src(), if (app.secrets_panel.visible) "Close" else "Secrets", .{}, .{})) {
+            app.secrets_panel.toggle();
         }
     }
 
-    // Tool feed
+    // Body: chat column + optional secrets sidebar
     {
-        const perm = tool_feed.frame();
-        handlePermission(perm);
-    }
+        var body = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
+        defer body.deinit();
 
-    // Input bar
-    {
-        var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 10 },
-        });
-        defer hbox.deinit();
+        // Chat column
+        {
+            var chat_col = dvui.box(@src(), .{}, .{ .expand = .both });
+            defer chat_col.deinit();
 
-        var te = dvui.textEntry(@src(), .{
-            .text = .{ .internal = .{ .limit = 4096 } },
-            .placeholder = "Type a message...",
-        }, .{ .expand = .horizontal });
+            // Messages
+            {
+                var scroll = dvui.scrollArea(@src(), .{}, .{
+                    .expand = .both,
+                    .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                });
+                defer scroll.deinit();
 
-        const label = if (app.is_busy) "Steer" else "Send";
-        if (dvui.button(@src(), label, .{}, .{})) {
-            const text = te.getText();
-            if (text.len > 0) {
-                sendMessage(text);
+                for (app.messages.items, 0..) |m, i| {
+                    if (m.content) |content| {
+                        messageFrame(content, m.role == .user, i);
+                    }
+                }
+            }
+
+            // Tool feed
+            {
+                const perm = tool_feed.frame();
+                handlePermission(perm);
+            }
+
+            // Input bar
+            {
+                var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                    .expand = .horizontal,
+                    .padding = .{ .x = 10, .y = 4, .w = 10, .h = 10 },
+                });
+                defer hbox.deinit();
+
+                var te = dvui.textEntry(@src(), .{
+                    .text = .{ .internal = .{ .limit = 4096 } },
+                    .placeholder = "Type a message...",
+                }, .{ .expand = .horizontal });
+
+                const label = if (app.is_busy) "Steer" else "Send";
+                if (dvui.button(@src(), label, .{}, .{})) {
+                    const text = te.getText();
+                    if (text.len > 0) {
+                        sendMessage(text);
+                    }
+                }
+
+                te.deinit();
             }
         }
 
-        te.deinit();
+        // Secrets sidebar
+        app.secrets_panel.frame();
     }
 
     return app.checkQuit();
