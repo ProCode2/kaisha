@@ -7,12 +7,12 @@ const chat = @import("dvui/screens/chat.zig");
 
 pub const c = RaylibBackend.c;
 
-var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
-const gpa = gpa_instance.allocator();
+// Use page_allocator — GPA reports shutdown leaks that aren't real bugs
+// (BoxManager.list, history messages, websocket buffers freed by OS on exit).
+const gpa = std.heap.page_allocator;
 
 pub fn main() !void {
     RaylibBackend.enableRaylibLogging();
-    defer _ = gpa_instance.deinit();
 
     try app.init(gpa);
     defer app.deinit();
