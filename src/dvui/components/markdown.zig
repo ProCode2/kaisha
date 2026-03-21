@@ -94,9 +94,30 @@ pub fn render(tl: *dvui.TextLayoutWidget, text: []const u8, base_color: dvui.Col
 
         // Horizontal rule
         if (line.len >= 3 and isHorizontalRule(line)) {
-            tl.addText("───────────────────────────\n", .{
+            tl.addText("-----------------------------\n", .{
                 .color_text = dvui.Color{ .r = 80, .g = 80, .b = 100 },
             });
+            continue;
+        }
+
+        // Blockquote
+        if (line.len >= 2 and line[0] == '>' and line[1] == ' ') {
+            tl.addText("  | ", .{ .color_text = dvui.Color{ .r = 80, .g = 80, .b = 100 } });
+            renderInline(tl, line[2..], .{
+                .color_text = dvui.Color{ .r = 170, .g = 170, .b = 190 },
+                .font = dvui.Font.theme(.body).withStyle(.italic),
+            });
+            tl.addText("\n", .{});
+            continue;
+        }
+        if (line.len >= 1 and line[0] == '>') {
+            tl.addText("  | ", .{ .color_text = dvui.Color{ .r = 80, .g = 80, .b = 100 } });
+            const rest = if (line.len > 1) line[1..] else "";
+            renderInline(tl, rest, .{
+                .color_text = dvui.Color{ .r = 170, .g = 170, .b = 190 },
+                .font = dvui.Font.theme(.body).withStyle(.italic),
+            });
+            tl.addText("\n", .{});
             continue;
         }
 

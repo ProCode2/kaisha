@@ -6,6 +6,7 @@ const boxes = @import("boxes");
 const Box = boxes.Box;
 const BoxManager = boxes.BoxManager;
 const box_list = @import("screens/box_list.zig");
+const chat = @import("screens/chat.zig");
 const secrets_mod = @import("components/secrets.zig");
 pub const SecretsPanel = secrets_mod.SecretsPanel;
 
@@ -28,7 +29,20 @@ pub fn init(allocator: std.mem.Allocator) !void {
 }
 
 pub fn deinit() void {
+    // Free message content strings
+    for (messages.items) |m| {
+        if (m.content) |text| gpa.free(text);
+    }
     messages.deinit(gpa);
+
+    // Stop all active boxes
+    var iter = box_manager.active.iterator();
+    while (iter.next()) |entry| {
+        var ab = entry.value_ptr.*;
+        ab.shutdown();
+        ab.deinit();
+    }
+    box_manager.active.deinit(gpa);
     box_manager.deinit();
 }
 
@@ -51,6 +65,7 @@ pub fn openBox(name: []const u8) void {
             messages.append(gpa, m) catch {};
         }
         std.debug.print("[App] Loaded {d} history messages\n", .{history.len});
+        if (history.len > 0) chat.scroll_to_bottom = true;
 
         screen = .chat;
     }

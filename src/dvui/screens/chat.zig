@@ -9,6 +9,8 @@ const markdown = @import("../components/markdown.zig");
 const box_list = @import("box_list.zig");
 
 pub var tool_feed: ToolFeed = .{};
+pub var scroll_to_bottom: bool = false;
+var msg_scroll_info: dvui.ScrollInfo = .{};
 
 pub fn frame() bool {
     drainEvents();
@@ -57,7 +59,9 @@ pub fn frame() bool {
 
             // Messages
             {
-                var scroll = dvui.scrollArea(@src(), .{}, .{
+                var scroll = dvui.scrollArea(@src(), .{
+                    .scroll_info = &msg_scroll_info,
+                }, .{
                     .expand = .both,
                     .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
                 });
@@ -67,6 +71,12 @@ pub fn frame() bool {
                     if (m.content) |content| {
                         messageFrame(content, m.role == .user, i);
                     }
+                }
+
+                // Auto scroll to bottom
+                if (scroll_to_bottom) {
+                    scroll_to_bottom = false;
+                    msg_scroll_info.scrollToFraction(.vertical, 1.0);
                 }
             }
 
@@ -80,6 +90,7 @@ pub fn frame() bool {
             {
                 var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .expand = .horizontal,
+                    .min_size_content = .{ .h = 30 },
                     .padding = .{ .x = 10, .y = 4, .w = 10, .h = 10 },
                 });
                 defer hbox.deinit();
@@ -88,16 +99,20 @@ pub fn frame() bool {
                     .text = .{ .internal = .{ .limit = 4096 } },
                     .placeholder = "Type a message...",
                 }, .{ .expand = .horizontal });
+                const enter = te.enter_pressed;
+                const text = te.getText();
+                // Dupe before deinit since getText returns internal buffer
+                var send_buf: [4096]u8 = undefined;
+                const send_len = @min(text.len, send_buf.len);
+                @memcpy(send_buf[0..send_len], text[0..send_len]);
+                te.deinit();
 
                 const label = if (app.is_busy) "Steer" else "Send";
-                if (dvui.button(@src(), label, .{}, .{})) {
-                    const text = te.getText();
-                    if (text.len > 0) {
-                        sendMessage(text);
-                    }
-                }
+                const clicked = dvui.button(@src(), label, .{}, .{});
 
-                te.deinit();
+                if ((clicked or enter) and send_len > 0) {
+                    sendMessage(send_buf[0..send_len]);
+                }
             }
         }
 
@@ -135,6 +150,7 @@ fn sendMessage(text: []const u8) void {
     const b = app.active_box orelse return;
     const owned = app.gpa.dupe(u8, text) catch return;
     app.messages.append(app.gpa, Message{ .content = owned, .role = .user }) catch return;
+    scroll_to_bottom = true;
 
     if (app.is_busy) {
         b.sendSteer(owned);
@@ -148,6 +164,7 @@ fn sendMessage(text: []const u8) void {
 
 fn drainEvents() void {
     const b = app.active_box orelse return;
+    const msg_count_before = app.messages.items.len;
     while (b.pollEvent()) |event| {
         switch (event) {
             .agent_start => app.setStatus("Thinking..."),
@@ -193,6 +210,9 @@ fn drainEvents() void {
                 tool_feed.clear();
             },
         }
+    }
+    if (app.messages.items.len > msg_count_before) {
+        scroll_to_bottom = true;
     }
 }
 
