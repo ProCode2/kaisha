@@ -96,6 +96,29 @@ pub fn build(b: *std.Build) void {
         dvui_test_run.step.dependOn(b.getInstallStep());
         const dvui_test_step = b.step("dvui-test", "Run DVUI prototype");
         dvui_test_step.dependOn(&dvui_test_run.step);
+
+        // --- DVUI full app (box list + chat + tool feed) ---
+        const dvui_app_mod = b.createModule(.{
+            .root_source_file = b.path("src/dvui_app.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "dvui", .module = dvui_dep.module("dvui_raylib") },
+                .{ .name = "raylib-backend", .module = dvui_dep.module("raylib") },
+                .{ .name = "agent_core", .module = agent_core_mod },
+                .{ .name = "boxes", .module = boxes_mod },
+            },
+        });
+        const dvui_app_exe = b.addExecutable(.{
+            .name = "kaisha-dvui",
+            .root_module = dvui_app_mod,
+        });
+        b.installArtifact(dvui_app_exe);
+
+        const dvui_app_run = b.addRunArtifact(dvui_app_exe);
+        dvui_app_run.step.dependOn(b.getInstallStep());
+        const dvui_app_step = b.step("dvui", "Run Kaisha with DVUI");
+        dvui_app_step.dependOn(&dvui_app_run.step);
     }
 
     // --- kaisha desktop (UI + agent — macOS/native only) ---

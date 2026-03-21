@@ -1,0 +1,59 @@
+const std = @import("std");
+const dvui = @import("dvui");
+const RaylibBackend = @import("raylib-backend");
+const app = @import("dvui/app.zig");
+const box_list = @import("dvui/screens/box_list.zig");
+const chat = @import("dvui/screens/chat.zig");
+
+pub const c = RaylibBackend.c;
+
+var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+const gpa = gpa_instance.allocator();
+
+pub fn main() !void {
+    RaylibBackend.enableRaylibLogging();
+    defer _ = gpa_instance.deinit();
+
+    try app.init(gpa);
+    defer app.deinit();
+
+    var backend = try RaylibBackend.initWindow(.{
+        .gpa = gpa,
+        .size = .{ .w = 900.0, .h = 650.0 },
+        .vsync = true,
+        .title = "Kaisha",
+    });
+    defer backend.deinit();
+
+    // Kaisha dark theme
+    var theme = dvui.Theme.builtin.adwaita_dark;
+    theme.name = "Kaisha Dark";
+    theme.fill = dvui.Color{ .r = 30, .g = 30, .b = 40 };
+    theme.text = dvui.Color{ .r = 220, .g = 220, .b = 230 };
+    theme.focus = dvui.Color{ .r = 100, .g = 180, .b = 255 };
+    theme.border = dvui.Color{ .r = 55, .g = 58, .b = 75 };
+    theme.text_select = dvui.Color{ .r = 45, .g = 85, .b = 140 };
+    theme.window = .{ .fill = dvui.Color{ .r = 32, .g = 33, .b = 44 } };
+    theme.control = .{ .fill = dvui.Color{ .r = 40, .g = 42, .b = 54 } };
+
+    var win = try dvui.Window.init(@src(), gpa, backend.backend(), .{ .theme = theme });
+    defer win.deinit();
+
+    main_loop: while (true) {
+        c.BeginDrawing();
+        const nstime = win.beginWait(true);
+        try win.begin(nstime);
+        try backend.addAllEvents(&win);
+        backend.clear();
+
+        const keep_running = switch (app.screen) {
+            .box_list => box_list.frame(),
+            .chat => chat.frame(),
+        };
+        if (!keep_running) break :main_loop;
+
+        const end_micros = try win.end(.{});
+        backend.setCursor(win.cursorRequested());
+        backend.EndDrawingWaitEventTimeout(win.waitTime(end_micros));
+    }
+}
