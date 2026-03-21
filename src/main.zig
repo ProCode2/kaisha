@@ -1,35 +1,33 @@
 const std = @import("std");
 const sukue = @import("sukue");
-const c = sukue.c;
-const Theme = sukue.Theme;
+const Navigator = sukue.Navigator;
 const ChatScreen = @import("ui/screens/chat.zig");
-const Screen = @import("ui/screens/screen.zig").Screen;
+const BoxListScreen = @import("ui/screens/box_list.zig");
 
 const g_allocator = std.heap.page_allocator;
 
 pub fn main() void {
-    c.SetConfigFlags(c.FLAG_WINDOW_RESIZABLE);
-    c.InitWindow(800, 600, "Kaisha");
-    defer c.CloseWindow();
-    c.SetWindowMinSize(640, 480);
-    c.SetTargetFPS(60);
+    var app = sukue.App.init(g_allocator, .{
+        .title = "Kaisha",
+        .width = 800,
+        .height = 600,
+    });
+    defer app.deinit();
 
-    var theme = Theme.init();
-    defer theme.deinit();
+    var nav = Navigator.init(g_allocator);
+    defer nav.deinit();
 
-    var chat = ChatScreen.init(g_allocator);
+    var chat = ChatScreen.init(g_allocator, &nav);
     defer chat.deinit();
 
-    var current_screen: Screen = .{ .chat = &chat };
-    _ = &current_screen;
+    var box_list = BoxListScreen.init(g_allocator, &nav, &chat) catch {
+        std.debug.print("Failed to initialize box manager\n", .{});
+        return;
+    };
+    defer box_list.deinit();
 
-    while (!c.WindowShouldClose()) {
-        c.BeginDrawing();
-        defer c.EndDrawing();
+    nav.push("boxes", box_list.screen());
+    nav.push("chat", chat.screen());
 
-        c.SetMouseCursor(c.MOUSE_CURSOR_DEFAULT);
-        c.ClearBackground(theme.bg);
-
-        current_screen.draw(theme);
-    }
+    app.run(&nav, Navigator.layoutFn, Navigator.drawFn);
 }

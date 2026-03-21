@@ -97,6 +97,20 @@ pub const SecretProxy = struct {
         return buf.toOwnedSlice(allocator) catch "";
     }
 
+    /// Static vtable for use with agent-core's SecretFilter interface.
+    /// Callers construct SecretFilter with .ptr = @ptrCast(proxy), .vtable = &SecretProxy.secret_filter_vtable.
+    pub const secret_filter_vtable = struct {
+        pub fn substituteFn(ctx: *anyopaque, allocator: std.mem.Allocator, text: []const u8) []const u8 {
+            const self: *const SecretProxy = @ptrCast(@alignCast(ctx));
+            return self.substitute(allocator, text);
+        }
+
+        pub fn maskFn(ctx: *anyopaque, allocator: std.mem.Allocator, text: []const u8) []const u8 {
+            const self: *const SecretProxy = @ptrCast(@alignCast(ctx));
+            return self.mask(allocator, text);
+        }
+    };
+
     pub fn deinit(self: *SecretProxy) void {
         self.store.deinit();
     }

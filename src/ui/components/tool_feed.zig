@@ -87,6 +87,13 @@ pub const ToolFeed = struct {
         self.scroll_target = 0;
     }
 
+    /// Compute total content height without drawing.
+    pub fn computeHeight(self: *const ToolFeed) c_int {
+        var h: c_int = 0;
+        for (0..self.count) |i| h += entryHeight(&self.entries[i]);
+        return h;
+    }
+
     // --- Drawing ---
 
     pub const DrawResult = struct { height: c_int, consumed_scroll: bool, perm_action: PermissionAction };

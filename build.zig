@@ -13,6 +13,13 @@ pub fn build(b: *std.Build) void {
     });
     const websocket_mod = websocket_dep.module("websocket");
 
+    // --- clay-zig dependency ---
+    const clay_dep = b.dependency("zclay", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const clay_mod = clay_dep.module("zclay");
+
     // --- secrets-proxy package ---
     const secrets_proxy_mod = b.addModule("secrets_proxy", .{
         .root_source_file = b.path("packages/secrets-proxy/src/root.zig"),
@@ -27,6 +34,17 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "websocket", .module = websocket_mod },
+        },
+    });
+
+    // --- boxes package ---
+    const boxes_mod = b.addModule("boxes", .{
+        .root_source_file = b.path("packages/boxes/src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "agent_core", .module = agent_core_mod },
+            .{ .name = "secrets_proxy", .module = secrets_proxy_mod },
         },
     });
 
@@ -59,6 +77,9 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true,
+            .imports = &.{
+                .{ .name = "clay", .module = clay_mod },
+            },
         });
         sukue_mod.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include" });
         sukue_mod.addIncludePath(b.path("vendor"));
@@ -83,6 +104,7 @@ pub fn build(b: *std.Build) void {
                     .{ .name = "sukue", .module = sukue_mod },
                     .{ .name = "agent_core", .module = agent_core_mod },
                     .{ .name = "secrets_proxy", .module = secrets_proxy_mod },
+                    .{ .name = "boxes", .module = boxes_mod },
                 },
             }),
         });
@@ -93,5 +115,33 @@ pub fn build(b: *std.Build) void {
         run_cmd.step.dependOn(b.getInstallStep());
         const run_step = b.step("run", "Build and run Kaisha");
         run_step.dependOn(&run_cmd.step);
+
+        // --- sukue tests ---
+        const sukue_tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("packages/sukue/src/tests.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+                .imports = &.{
+                    .{ .name = "clay", .module = clay_mod },
+                },
+            }),
+        });
+        sukue_tests.root_module.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include" });
+        sukue_tests.root_module.addIncludePath(b.path("vendor"));
+        sukue_tests.root_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/lib" });
+        sukue_tests.root_module.linkSystemLibrary("raylib", .{});
+        sukue_tests.root_module.addCSourceFile(.{ .file = b.path("vendor/raygui_impl.c"), .flags = &.{} });
+        sukue_tests.root_module.addCSourceFile(.{ .file = b.path("vendor/md4c.c"), .flags = &.{} });
+        sukue_tests.root_module.linkFramework("OpenGL", .{});
+        sukue_tests.root_module.linkFramework("Cocoa", .{});
+        sukue_tests.root_module.linkFramework("IOKit", .{});
+        sukue_tests.root_module.linkFramework("CoreAudio", .{});
+        sukue_tests.root_module.linkFramework("CoreVideo", .{});
+
+        const run_sukue_tests = b.addRunArtifact(sukue_tests);
+        const test_step = b.step("test", "Run sukue tests");
+        test_step.dependOn(&run_sukue_tests.step);
     }
 }

@@ -77,8 +77,13 @@ pub const AgentRuntime = struct {
             .cwd_ptr = &rt.bash.cwd,
             .storage = if (rt.history_manager) |*hm| hm.storage() else null,
             .agent_server = agent_server,
-            .substitute_fn = substituteSecrets,
-            .mask_fn = maskSecrets,
+            .secret_filter = .{
+                .ptr = @ptrCast(&rt.secret_proxy),
+                .vtable = &.{
+                    .substitute = secrets.SecretProxy.secret_filter_vtable.substituteFn,
+                    .mask = secrets.SecretProxy.secret_filter_vtable.maskFn,
+                },
+            },
         });
     }
 
@@ -95,21 +100,11 @@ pub const AgentRuntime = struct {
     }
 };
 
-// Module-level reference for function pointers (Zig has no closures)
+// Secrets tool still needs a global (StaticTool._executeFn has no context param).
 var g_runtime: ?*AgentRuntime = null;
 
 pub fn setGlobalRuntime(rt: *AgentRuntime) void {
     g_runtime = rt;
-}
-
-fn substituteSecrets(allocator: std.mem.Allocator, text: []const u8) []const u8 {
-    if (g_runtime) |rt| return rt.secret_proxy.substitute(allocator, text);
-    return text;
-}
-
-fn maskSecrets(allocator: std.mem.Allocator, text: []const u8) []const u8 {
-    if (g_runtime) |rt| return rt.secret_proxy.mask(allocator, text);
-    return text;
 }
 
 fn executeSecretsTool(allocator: std.mem.Allocator, _: []const u8, args_json: []const u8) agent_core.ToolResult {

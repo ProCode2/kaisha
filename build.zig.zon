@@ -6,6 +6,10 @@
             .url = "https://github.com/karlseguin/websocket.zig/archive/refs/heads/master.tar.gz",
             .hash = "websocket-0.1.0-ZPISdRlzAwBB_Bz2UMMqxYqF6YEVTIBoFsbzwPUJTHIc",
         },
+        .zclay = .{
+            .url = "git+https://github.com/johan0A/clay-zig-bindings?ref=v0.2.2+0.14#18cc9c148f02c3f00f824cc3a36db5030fd3de34",
+            .hash = "zclay-0.2.2-Ej1rkJfRAABn4fTSKQ1Rn54ssdmyCsuBT3zjrdhSxTO4",
+        },
     },
     .fingerprint = 0xf0abde267fe6e59c,
     .minimum_zig_version = "0.15.0",

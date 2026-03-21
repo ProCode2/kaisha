@@ -2,6 +2,8 @@ const std = @import("std");
 const Message = @import("message.zig").Message;
 const Provider = @import("provider.zig").Provider;
 
+const COMPACTION_PROMPT = @embedFile("prompt/compaction.md");
+
 /// Compaction: summarize older messages to reduce token usage.
 ///
 /// Pi-mono approach:
@@ -106,7 +108,7 @@ fn requestSummary(allocator: std.mem.Allocator, provider: Provider, messages: []
     defer prompt_buf.deinit(allocator);
     const w = prompt_buf.writer(allocator);
 
-    try w.writeAll("Summarize this conversation concisely. Focus on: decisions made, files modified, key findings, and current state. Be brief.\n\n");
+    try w.writeAll(COMPACTION_PROMPT);
 
     for (messages) |m| {
         const role_str = switch (m.role) {

@@ -1,345 +1,352 @@
 const std = @import("std");
 const sukue = @import("sukue");
 const c = sukue.c;
-const Theme = sukue.Theme;
-const Button = sukue.Button;
 const TextInput = sukue.TextInput;
-const ScrollArea = sukue.ScrollArea;
+const clay = sukue.clay;
 const ChatBubble = @import("../components/chat_bubble.zig");
 
 const agent_core = @import("agent_core");
 const Message = agent_core.Message;
-const Event = agent_core.Event;
-const EventQueue = agent_core.events.EventQueue;
-const PermissionGate = agent_core.PermissionGate;
-const LocalAgentServer = agent_core.LocalAgentServer;
-const LocalAgentClient = agent_core.LocalAgentClient;
-const RemoteAgentClient = agent_core.RemoteAgentClient;
-const AgentClient = agent_core.AgentClient;
+
+const boxes = @import("boxes");
+const Box = boxes.Box;
 
 const ToolFeed = @import("../components/tool_feed.zig");
 const SecretsPanel = @import("../components/secrets_panel.zig").SecretsPanel;
-const agent_setup = @import("../../agent_setup.zig");
-const AgentRuntime = agent_setup.AgentRuntime;
+const FrameContext = sukue.FrameContext;
+const Screen = sukue.Screen;
+const agent = @import("chat_agent.zig");
 
 const ChatScreen = @This();
 
 allocator: std.mem.Allocator,
+nav: *sukue.Navigator,
 messages: std.ArrayList(Message) = .empty,
 input_buf: [256]u8 = std.mem.zeroes([256]u8),
 input: TextInput = undefined,
-scroll: ScrollArea = .{ .x = 0, .y = 55, .width = 0, .height = 0 },
 setup_done: bool = false,
 
-// Agent runtime (unified setup — same for local + remote)
-runtime: AgentRuntime = undefined,
-runtime_initialized: bool = false,
+// Box — set via openBox() from BoxListScreen
+active_box: Box = undefined,
+box_set: bool = false,
 
-// Async state
-event_queue: EventQueue = .{},
+// UI state
 tool_feed: ToolFeed.ToolFeed = .{},
-permission_gate: PermissionGate = PermissionGate.init(.ask),
-local_server: LocalAgentServer = undefined,
-local_client: LocalAgentClient = undefined,
 secrets_panel: SecretsPanel = undefined,
-remote_client: ?*RemoteAgentClient = null,
-client: AgentClient = undefined,
-is_remote: bool = false,
 is_busy: bool = false,
+/// Frames remaining to keep scrolling to bottom. >0 means actively scrolling.
+/// We use a counter (not a bool) because the layout from the frame that triggered
+/// the scroll doesn't include the new message yet — we need to retry after recomputation.
+scroll_to_bottom_frames: u8 = 0,
 status_text: [128]u8 = std.mem.zeroes([128]u8),
 status_len: usize = 0,
 
-pub fn init(allocator: std.mem.Allocator) ChatScreen {
+const screen_vtable = Screen.VTable{
+    .layout = layoutVtable,
+    .draw_legacy = drawLegacyVtable,
+};
+
+fn layoutVtable(ctx: *anyopaque, frame: *const FrameContext) void {
+    const self: *ChatScreen = @ptrCast(@alignCast(ctx));
+    self.layout(frame);
+}
+
+fn drawLegacyVtable(ctx: *anyopaque, frame: *const FrameContext) void {
+    const self: *ChatScreen = @ptrCast(@alignCast(ctx));
+    self.drawLegacy(frame);
+}
+
+pub fn screen(self: *ChatScreen) Screen {
+    return .{ .ptr = @ptrCast(self), .vtable = &screen_vtable };
+}
+
+/// Set the active box and load its history. Called by BoxListScreen before navigating here.
+pub fn openBox(self: *ChatScreen, b: Box) void {
+    // Clear previous messages
+    for (self.messages.items) |m| {
+        if (m.content) |text| self.allocator.free(text);
+    }
+    self.messages.clearRetainingCapacity();
+    self.tool_feed.clear();
+    self.is_busy = false;
+    self.status_len = 0;
+
+    self.active_box = b;
+    self.box_set = true;
+    self.setup_done = true;
+
+    // Load history from this box
+    const history = b.getHistory(self.allocator);
+    for (history) |m| {
+        self.messages.append(self.allocator, m) catch {};
+    }
+    if (history.len > 0) {
+        self.scroll_to_bottom_frames = 3;
+    }
+
+    std.debug.print("[ChatScreen] Opened box, {d} history messages\n", .{history.len});
+}
+
+pub fn init(allocator: std.mem.Allocator, nav: *sukue.Navigator) ChatScreen {
     return ChatScreen{
         .allocator = allocator,
+        .nav = nav,
         .input = TextInput{ .rect = undefined, .buf = undefined },
     };
 }
 
-fn ensureSetup(self: *ChatScreen) void {
-    if (self.setup_done) return;
-    self.setup_done = true;
-
-    // Check for remote mode: KAISHA_SERVER=host:port
-    const server_env = std.process.getEnvVarOwned(self.allocator, "KAISHA_SERVER") catch null;
-
-    if (server_env) |server_addr| {
-        defer self.allocator.free(server_addr);
-        var host: []const u8 = "127.0.0.1";
-        var port: u16 = 8420;
-        if (std.mem.indexOfScalar(u8, server_addr, ':')) |colon| {
-            host = server_addr[0..colon];
-            port = std.fmt.parseInt(u16, server_addr[colon + 1 ..], 10) catch 8420;
-        } else {
-            host = server_addr;
-        }
-
-        self.remote_client = RemoteAgentClient.connect(
-            self.allocator,
-            self.allocator.dupe(u8, host) catch return,
-            port,
-            &self.event_queue,
-        ) catch |err| {
-            std.debug.print("Failed to connect to remote server: {}\n", .{err});
-            self.remote_client = null;
-            self.setupLocal();
-            return;
-        };
-
-        self.is_remote = true;
-        self.client = self.remote_client.?.agentClient();
-        self.secrets_panel = SecretsPanel.init(self.allocator);
-        self.secrets_panel.setRemote(self.remote_client.?);
-        std.debug.print("Connected to remote server at {s}:{d}\n", .{ host, port });
-    } else {
-        self.setupLocal();
-    }
-}
-
-fn setupLocal(self: *ChatScreen) void {
-    // Unified runtime — same setup as server_main.zig
-    self.local_server = LocalAgentServer{
-        .event_queue = &self.event_queue,
-        .permission_gate = &self.permission_gate,
-    };
-
-    self.runtime = AgentRuntime.init(self.allocator);
-    self.runtime_initialized = true;
-    self.runtime.setup(self.local_server.agentServer());
-    agent_setup.setGlobalRuntime(&self.runtime);
-
-    // Load prior messages into UI display
-    for (self.runtime.agent.messages.items) |m| {
-        if (m.role == .user or (m.role == .assistant and m.content != null)) {
-            self.messages.append(self.allocator, Message{
-                .role = m.role,
-                .content = if (m.content) |ct| self.allocator.dupe(u8, ct) catch null else null,
-            }) catch {};
-        }
-    }
-
-    self.secrets_panel = SecretsPanel.init(self.allocator);
-    self.secrets_panel.setProxy(&self.runtime.secret_proxy);
-
-    self.local_client = LocalAgentClient{
-        .agent = &self.runtime.agent,
-        .permission_gate = &self.permission_gate,
-    };
-    self.client = self.local_client.agentClient();
-}
-
 pub fn deinit(self: *ChatScreen) void {
-    if (self.is_remote) {
-        if (self.remote_client) |rc| rc.deinit();
-    } else {
-        self.client.shutdown();
-    }
+    // Box lifecycle is owned by BoxManager, not ChatScreen
     for (self.messages.items) |m| {
         if (m.content) |text| self.allocator.free(text);
     }
     self.messages.deinit(self.allocator);
-    if (self.runtime_initialized) self.runtime.deinit();
 }
 
-pub fn draw(self: *ChatScreen, theme: Theme) void {
-    self.ensureSetup();
-    self.drainEvents();
+/// Phase 1: Declare Clay layout structure.
+pub fn layout(self: *ChatScreen, ctx: *const FrameContext) void {
+    if (!self.box_set) return; // No box assigned yet
+    agent.drainEvents(self);
 
-    const w = c.GetScreenWidth();
-    const h = c.GetScreenHeight();
+    const theme = ctx.theme;
+    const tp = theme.text_primary;
+    const ts = theme.text_secondary;
 
-    // Header
-    c.DrawTextEx(theme.font, "Kaisha", .{ .x = 10, .y = 10 }, theme.font_h1, theme.spacing, theme.text_primary);
-    c.DrawTextEx(theme.font, "How may I help you today?", .{ .x = 10, .y = 35 }, theme.font_h2, theme.spacing, theme.text_secondary);
+    // Root: full-screen vertical column
+    clay.UI()(.{
+        .id = clay.ElementId.ID("root"),
+        .layout = .{ .sizing = .{ .w = .grow, .h = .grow }, .direction = .top_to_bottom },
+    })({
+        // Header
+        clay.UI()(.{
+            .id = clay.ElementId.ID("header"),
+            .layout = .{
+                .sizing = .{ .w = .grow },
+                .padding = .{ .left = 10, .right = 10, .top = 10, .bottom = 4 },
+                .child_alignment = .{ .y = .center },
+            },
+        })({
+            // Back button
+            clay.UI()(.{
+                .id = clay.ElementId.ID("back_btn"),
+                .layout = .{ .sizing = .{ .w = .fixed(32), .h = .fixed(32) }, .child_alignment = .center },
+                .background_color = if (clay.hovered()) brighten(theme.surface) else .{ 0, 0, 0, 0 },
+                .corner_radius = clay.CornerRadius.all(4),
+            })({
+                clay.text("<", .{ .font_size = @intFromFloat(theme.font_h1), .color = colorToClay(ts) });
+            });
 
-    // Secrets toggle
-    const secrets_btn = Button{
-        .rect = .{ .x = @floatFromInt(w - 80), .y = 8, .width = 70, .height = 24 },
-        .label = if (self.secrets_panel.visible) "Close" else "Secrets",
-    };
-    if (secrets_btn.draw(theme)) self.secrets_panel.toggle();
+            clay.UI()(.{
+                .id = clay.ElementId.ID("titles"),
+                .layout = .{ .sizing = .{ .w = .grow }, .direction = .top_to_bottom },
+            })({
+                clay.text("Kaisha", .{ .font_size = @intFromFloat(theme.font_h1), .color = colorToClay(tp) });
+                if (self.status_len > 0) {
+                    clay.text(self.status_text[0..self.status_len], .{
+                        .font_size = @intFromFloat(theme.font_h2),
+                        .color = colorToClay(theme.warning),
+                    });
+                } else {
+                    clay.text("How may I help you today?", .{ .font_size = @intFromFloat(theme.font_h2), .color = colorToClay(ts) });
+                }
+            });
 
-    const wheel = c.GetMouseWheelMove();
-    const input_h: c_int = 40;
-    const input_y = h - input_h - 10;
+            clay.UI()(.{
+                .id = clay.ElementId.ID("secrets_btn"),
+                .layout = .{ .sizing = .{ .w = .fixed(70), .h = .fixed(24) }, .child_alignment = .center },
+                .background_color = if (clay.hovered()) brighten(theme.surface) else colorToClay(theme.surface),
+                .corner_radius = clay.CornerRadius.all(4),
+            })({
+                clay.text(if (self.secrets_panel.visible) "Close" else "Secrets", .{
+                    .font_size = 14, .color = colorToClay(tp),
+                });
+            });
+        });
 
-    // Tool feed
-    var feed_consumed_scroll = false;
-    var feed_result = ToolFeed.ToolFeed.DrawResult{ .height = 0, .consumed_scroll = false, .perm_action = .none };
+        // Body: chat column + optional secrets panel
+        clay.UI()(.{
+            .id = clay.ElementId.ID("body"),
+            .layout = .{ .sizing = .{ .w = .grow, .h = .grow } },
+        })({
+            clay.UI()(.{
+                .id = clay.ElementId.ID("chat_col"),
+                .layout = .{ .sizing = .{ .w = .grow, .h = .grow }, .direction = .top_to_bottom },
+            })({
+                // Scrollable messages
+                clay.UI()(.{
+                    .id = clay.ElementId.ID("messages"),
+                    .layout = .{
+                        .sizing = .{ .w = .grow, .h = .grow },
+                        .padding = .all(10),
+                        .child_gap = 8,
+                        .direction = .top_to_bottom,
+                    },
+                    .clip = .{ .vertical = true, .child_offset = clay.getScrollOffset() },
+                })({
+                    for (self.messages.items, 0..) |m, i| {
+                        if (m.content) |content| {
+                            const is_user = m.role == .user;
+                            const msg_color = if (is_user) theme.user_color else theme.assistant_color;
+                            clay.UI()(.{
+                                .id = clay.ElementId.IDI("msg", @intCast(i)),
+                                .layout = .{ .sizing = .{ .w = .grow }, .padding = .{ .left = 10, .top = 4, .bottom = 4 } },
+                            })({
+                                clay.text(content, .{
+                                    .font_size = @intFromFloat(theme.font_body),
+                                    .color = colorToClay(msg_color),
+                                });
+                            });
+                        }
+                    }
+                });
+
+                // Tool feed — reserve actual height so Clay accounts for it
+                if (self.tool_feed.count > 0) {
+                    const feed_h = self.tool_feed.computeHeight();
+                    const clamped_h: f32 = @min(@as(f32, @floatFromInt(feed_h + 24)), 400);
+                    clay.UI()(.{
+                        .id = clay.ElementId.ID("tool_feed"),
+                        .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(clamped_h) } },
+                    })({});
+                }
+
+                // Input bar
+                clay.UI()(.{
+                    .id = clay.ElementId.ID("input_bar"),
+                    .layout = .{
+                        .sizing = .{ .w = .grow },
+                        .padding = .{ .left = 10, .right = 10, .top = 4, .bottom = 10 },
+                        .child_gap = 8,
+                        .child_alignment = .{ .y = .center },
+                    },
+                })({
+                    clay.UI()(.{
+                        .id = clay.ElementId.ID("text_input"),
+                        .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(40) } },
+                    })({});
+
+                    clay.UI()(.{
+                        .id = clay.ElementId.ID("send_btn"),
+                        .layout = .{ .sizing = .{ .w = .fixed(70), .h = .fixed(40) }, .child_alignment = .center },
+                        .background_color = if (clay.hovered()) brighten(theme.surface) else colorToClay(theme.surface),
+                        .corner_radius = clay.CornerRadius.all(4),
+                    })({
+                        clay.text(if (self.is_busy) "Steer" else "Send", .{
+                            .font_size = @intFromFloat(theme.font_body), .color = colorToClay(tp),
+                        });
+                    });
+                });
+            });
+
+            if (self.secrets_panel.visible) {
+                clay.UI()(.{
+                    .id = clay.ElementId.ID("secrets_panel"),
+                    .layout = .{ .sizing = .{ .w = .fixed(300), .h = .grow }, .direction = .top_to_bottom },
+                    .background_color = colorToClay(theme.surface),
+                })({});
+            }
+        });
+    });
+}
+
+/// Phase 2: Draw legacy components at Clay-computed positions.
+pub fn drawLegacy(self: *ChatScreen, ctx: *const FrameContext) void {
+    const theme = ctx.theme.*;
+
+    // Back button
+    if (clay.pointerOver(clay.ElementId.ID("back_btn")) and c.IsMouseButtonPressed(c.MOUSE_BUTTON_LEFT)) {
+        self.nav.goTo("boxes");
+        return;
+    }
+
+    // Button clicks
+    if (clay.pointerOver(clay.ElementId.ID("secrets_btn")) and c.IsMouseButtonPressed(c.MOUSE_BUTTON_LEFT)) {
+        self.secrets_panel.toggle();
+    }
+    if ((clay.pointerOver(clay.ElementId.ID("send_btn")) and c.IsMouseButtonPressed(c.MOUSE_BUTTON_LEFT)) or
+        c.IsKeyPressed(c.KEY_ENTER))
+    {
+        if (self.is_busy) agent.steerAgent(self) else agent.sendMessage(self);
+    }
+
+    // Text input
+    const input_data = clay.getElementData(clay.ElementId.ID("text_input"));
+    if (input_data.found) {
+        const bb = input_data.bounding_box;
+        self.input.buf = &self.input_buf;
+        self.input.rect = .{ .x = bb.x, .y = bb.y, .width = bb.width, .height = bb.height };
+        self.input.draw(theme);
+    }
+
+    // Tool feed — draws within Clay-allocated space
     if (self.tool_feed.count > 0) {
-        feed_result = self.tool_feed.draw(10, input_y, w - 20, wheel, theme);
-        feed_consumed_scroll = feed_result.consumed_scroll;
+        const feed_data = clay.getElementData(clay.ElementId.ID("tool_feed"));
+        if (feed_data.found) {
+            const bb = feed_data.bounding_box;
+            const wheel = c.GetMouseWheelMove();
+            // Tool feed draws upward from bottom_y
+            const bottom_y: c_int = @intFromFloat(bb.y + bb.height);
+            const feed_result = self.tool_feed.draw(
+                @intFromFloat(bb.x), bottom_y,
+                @intFromFloat(bb.width), wheel, theme,
+            );
+            agent.handlePermissionAction(self, feed_result.perm_action);
+        }
     }
 
     // Secrets panel
-    const secrets_panel_width: c_int = if (self.secrets_panel.visible) 300 else 0;
     if (self.secrets_panel.visible) {
-        _ = self.secrets_panel.draw(w - secrets_panel_width, 55, secrets_panel_width, h - 65, theme);
+        const sp_data = clay.getElementData(clay.ElementId.ID("secrets_panel"));
+        if (sp_data.found) {
+            const bb = sp_data.bounding_box;
+            _ = self.secrets_panel.draw(
+                @intFromFloat(bb.x), @intFromFloat(bb.y),
+                @intFromFloat(bb.width), @intFromFloat(bb.height), theme,
+            );
+        }
     }
 
-    // Chat area
-    const chat_wheel = if (feed_consumed_scroll) @as(f32, 0) else wheel;
-    self.scroll.width = w - secrets_panel_width;
-    self.scroll.height = h - 115 - feed_result.height;
-    const scroll_y = self.scroll.beginWithWheel(chat_wheel);
-    var msg_y: c_int = 60 + scroll_y;
-    for (self.messages.items) |m| {
-        const blocked_y = if (feed_result.height > 0) input_y - feed_result.height - 8 else @as(c_int, 0);
-        msg_y += ChatBubble.draw(self.allocator, m, msg_y, w - 40, theme, blocked_y);
+    // Scroll to bottom — retry for multiple frames to survive layout recomputation
+    if (self.scroll_to_bottom_frames > 0) {
+        self.scroll_to_bottom_frames -= 1;
+        const scroll_data = clay.getScrollContainerData(clay.ElementId.ID("messages"));
+        if (scroll_data.found) {
+            const overflow = scroll_data.content_dimensions.h - scroll_data.scroll_container_dimensions.h;
+            if (overflow > 0) {
+                scroll_data.scroll_position.y = -overflow;
+            }
+        }
     }
-    self.scroll.end(msg_y - scroll_y - 60);
+
+    // Click to copy on message bubbles
+    if (c.IsMouseButtonPressed(c.MOUSE_BUTTON_LEFT)) {
+        for (self.messages.items, 0..) |m, i| {
+            if (m.content) |content| {
+                if (content.len > 0 and clay.pointerOver(clay.ElementId.IDI("msg", @intCast(i)))) {
+                    var buf = self.allocator.alloc(u8, content.len + 1) catch break;
+                    defer self.allocator.free(buf);
+                    @memcpy(buf[0..content.len], content);
+                    buf[content.len] = 0;
+                    c.SetClipboardText(@ptrCast(buf.ptr));
+                    ChatBubble.triggerToast(c.GetMouseX(), c.GetMouseY() - 20);
+                    break;
+                }
+            }
+        }
+    }
+
     ChatBubble.drawToast(theme);
+}
 
-    // Input
-    self.input.buf = &self.input_buf;
-    self.input.rect = .{ .x = 10, .y = @floatFromInt(input_y), .width = @as(f32, @floatFromInt(w - 100)), .height = @floatFromInt(input_h) };
-    self.input.draw(theme);
+fn colorToClay(rc: c.Color) clay.Color {
+    return .{ @floatFromInt(rc.r), @floatFromInt(rc.g), @floatFromInt(rc.b), @floatFromInt(rc.a) };
+}
 
-    // Send / Steer
-    const send_btn = Button{
-        .rect = .{ .x = @floatFromInt(w - 80), .y = @floatFromInt(input_y), .width = 70, .height = @floatFromInt(input_h) },
-        .label = if (self.is_busy) "Steer" else "Send",
+fn brighten(rc: c.Color) clay.Color {
+    return .{
+        @floatFromInt(@min(@as(u16, rc.r) + 25, 255)),
+        @floatFromInt(@min(@as(u16, rc.g) + 25, 255)),
+        @floatFromInt(@min(@as(u16, rc.b) + 25, 255)),
+        @floatFromInt(rc.a),
     };
-    if (send_btn.draw(theme) or c.IsKeyPressed(c.KEY_ENTER)) {
-        if (self.is_busy) self.steerAgent() else self.sendMessage();
-    }
-
-    // Permission responses
-    if (feed_result.perm_action != .none) {
-        const pending_name = self.findPendingPermissionName();
-        switch (feed_result.perm_action) {
-            .allow => {
-                if (pending_name) |name| self.tool_feed.promoteToRunning(name);
-                self.client.sendPermission(true, false);
-            },
-            .allow_always => {
-                if (pending_name) |name| self.tool_feed.promoteToRunning(name);
-                self.client.sendPermission(true, true);
-            },
-            .deny => {
-                if (pending_name) |name| self.tool_feed.completeEntry(name, false, "Permission denied by user");
-                self.client.sendPermission(false, false);
-            },
-            .none => {},
-        }
-    }
-}
-
-fn steerAgent(self: *ChatScreen) void {
-    const steer_text = self.input.getText();
-    if (steer_text.len == 0) return;
-    const owned = self.allocator.dupe(u8, steer_text) catch return;
-    self.messages.append(self.allocator, Message{ .content = owned, .role = .user }) catch return;
-    self.input.clear();
-    self.scroll.scrollToBottom();
-    self.client.sendSteer(owned);
-}
-
-fn sendMessage(self: *ChatScreen) void {
-    const user_message = self.input.getText();
-    if (user_message.len == 0) return;
-
-    // Template expansion
-    var final_message = user_message;
-    if (user_message.len > 1 and user_message[0] == '/') {
-        const cwd = if (self.runtime_initialized) self.runtime.bash.cwd else "/";
-        const templates = agent_core.templates.loadTemplates(self.allocator, cwd);
-        if (agent_core.templates.findTemplate(templates, user_message[1..])) |tmpl| {
-            final_message = tmpl.content;
-        }
-    }
-
-    const owned = self.allocator.dupe(u8, final_message) catch return;
-    self.messages.append(self.allocator, Message{ .content = owned, .role = .user }) catch return;
-    self.input.clear();
-    self.scroll.scrollToBottom();
-    self.is_busy = true;
-    self.setStatus("Thinking...");
-    self.tool_feed.clear();
-    self.client.sendMessage(owned);
-}
-
-fn drainEvents(self: *ChatScreen) void {
-    while (self.event_queue.pop()) |event| {
-        switch (event) {
-            .agent_start => self.setStatus("Thinking..."),
-            .turn_start, .turn_end, .message_start, .message_end, .agent_end => {},
-            .tool_call_start => |p| {
-                const name = p.tool_name[0..p.tool_name_len];
-                self.setStatusFmt("Running {s}...", .{name});
-                self.tool_feed.promoteToRunning(name);
-                if (!self.hasPendingEntry(name)) self.tool_feed.addEntry(name, p.getArgs());
-            },
-            .tool_call_end => |p| {
-                const name = p.tool_name[0..p.tool_name_len];
-                self.tool_feed.completeEntry(name, p.success, p.getOutput());
-                if (p.success) self.setStatusFmt("{s} done", .{name}) else self.setStatusFmt("{s} failed", .{name});
-            },
-            .assistant_text => |r| {
-                if (r.getContent()) |text| {
-                    const duped = self.allocator.dupe(u8, text) catch "";
-                    if (duped.len > 0) {
-                        self.messages.append(self.allocator, Message{ .content = duped, .role = .assistant }) catch {};
-                        self.scroll.scrollToBottom();
-                    }
-                }
-            },
-            .permission_request => |req| {
-                self.tool_feed.addPermissionEntry(req.getName(), req.args_ptr, req.args_len);
-            },
-            .result => |r| {
-                if (r.content_ptr) |ptr| {
-                    const text = ptr[0..r.content_len];
-                    const duped = self.allocator.dupe(u8, text) catch "";
-                    self.messages.append(self.allocator, Message{
-                        .content = if (duped.len > 0) duped else null,
-                        .role = .assistant,
-                    }) catch {};
-                } else if (r.is_error) {
-                    self.messages.append(self.allocator, Message{
-                        .content = self.allocator.dupe(u8, "Error: no response") catch null,
-                        .role = .assistant,
-                    }) catch {};
-                }
-                self.is_busy = false;
-                self.status_len = 0;
-                self.tool_feed.clear();
-                self.scroll.scrollToBottom();
-            },
-        }
-    }
-}
-
-fn findPendingPermissionName(self: *const ChatScreen) ?[]const u8 {
-    var i = self.tool_feed.count;
-    while (i > 0) {
-        i -= 1;
-        if (self.tool_feed.entries[i].status == .pending_permission)
-            return self.tool_feed.entries[i].tool_name[0..self.tool_feed.entries[i].tool_name_len];
-    }
-    return null;
-}
-
-fn hasPendingEntry(self: *const ChatScreen, name: []const u8) bool {
-    var i = self.tool_feed.count;
-    while (i > 0) {
-        i -= 1;
-        const e = &self.tool_feed.entries[i];
-        if (std.mem.eql(u8, e.tool_name[0..e.tool_name_len], name) and
-            (e.status == .running or e.status == .pending_permission)) return true;
-    }
-    return false;
-}
-
-fn setStatus(self: *ChatScreen, text: []const u8) void {
-    const len = @min(text.len, self.status_text.len - 1);
-    @memcpy(self.status_text[0..len], text[0..len]);
-    self.status_text[len] = 0;
-    self.status_len = len;
-}
-
-fn setStatusFmt(self: *ChatScreen, comptime fmt: []const u8, args: anytype) void {
-    const result = std.fmt.bufPrint(self.status_text[0 .. self.status_text.len - 1], fmt, args) catch return;
-    self.status_text[result.len] = 0;
-    self.status_len = result.len;
 }

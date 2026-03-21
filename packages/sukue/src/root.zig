@@ -3,6 +3,16 @@
 pub const Theme = @import("theme.zig");
 pub const c = @import("c.zig").c; // transitional: consumers use this until Context migration
 
+// Clay layout system
+pub const clay = @import("clay");
+pub const App = @import("app.zig").App;
+pub const AppConfig = @import("app.zig").AppConfig;
+pub const FrameContext = @import("app.zig").FrameContext;
+pub const renderer = @import("renderer.zig");
+pub const Color = @import("types.zig").Color;
+pub const Screen = @import("screen.zig").Screen;
+pub const Navigator = @import("screen.zig").Navigator;
+
 // Components
 pub const ScrollArea = @import("components/scroll_area.zig");
 pub const Button = @import("components/button.zig");
@@ -21,4 +31,5 @@ pub const json_util = @import("util/json.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
+    _ = @import("tests.zig");
 }

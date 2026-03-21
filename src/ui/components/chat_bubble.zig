@@ -50,6 +50,13 @@ pub fn draw(allocator: std.mem.Allocator, msg: message.Message, y: c_int, max_wi
     return total_height;
 }
 
+/// Trigger the "Copied!" toast at a given position.
+pub fn triggerToast(x: c_int, y: c_int) void {
+    toast_timer = 1.0;
+    toast_x = x;
+    toast_y = y;
+}
+
 /// Draw the "Copied!" toast if active. Call once per frame after all bubbles.
 pub fn drawToast(theme: Theme) void {
     if (toast_timer <= 0) {

@@ -50,9 +50,8 @@ pub fn handleClipboard(buf: [*]u8, max: usize) void {
         }
         buf[end] = 0;
     } else if (c.IsKeyPressed(c.KEY_A)) {
-        // Select all — mark for replacement (clear buffer, next paste replaces all)
-        // Since GuiTextBox doesn't support selection, Ctrl+A clears the field
-        @memset(buf[0..max], 0);
+        // Select all — copy current content to clipboard (GuiTextBox has no selection)
+        c.SetClipboardText(buf);
     } else if (c.IsKeyPressed(c.KEY_C)) {
         // Copy — copy current content to clipboard
         c.SetClipboardText(buf);

@@ -18,6 +18,26 @@ const skills_mod = @import("skills.zig");
 const DEFAULT_SYSTEM_PROMPT = @embedFile("prompt/system.md");
 const MEMORY_PROMPT = @embedFile("prompt/memory.md");
 
+/// Vtable interface for secret substitution/masking.
+/// Follows the std.mem.Allocator pattern (ptr + vtable).
+pub const SecretFilter = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        substitute: *const fn (*anyopaque, std.mem.Allocator, []const u8) []const u8,
+        mask: *const fn (*anyopaque, std.mem.Allocator, []const u8) []const u8,
+    };
+
+    pub fn substitute(self: SecretFilter, allocator: std.mem.Allocator, text: []const u8) []const u8 {
+        return self.vtable.substitute(self.ptr, allocator, text);
+    }
+
+    pub fn mask(self: SecretFilter, allocator: std.mem.Allocator, text: []const u8) []const u8 {
+        return self.vtable.mask(self.ptr, allocator, text);
+    }
+};
+
 /// Agent loop configuration.
 pub const LoopConfig = struct {
     allocator: std.mem.Allocator,
@@ -28,10 +48,9 @@ pub const LoopConfig = struct {
     /// Pointer to current working directory. Must point to stable memory
     /// (e.g. &bash.cwd) so it always reflects the latest cwd after cd commands.
     cwd_ptr: *const []const u8,
-    /// Optional: substitute secret placeholders in tool args before execution.
-    substitute_fn: ?*const fn (std.mem.Allocator, []const u8) []const u8 = null,
-    /// Optional: mask secret values in tool output after execution.
-    mask_fn: ?*const fn (std.mem.Allocator, []const u8) []const u8 = null,
+    /// Optional: secret filter for substitution/masking. Vtable interface —
+    /// supports multiple agent instances without global state.
+    secret_filter: ?SecretFilter = null,
     /// Optional: extra system prompt section (e.g. available secrets list).
     extra_system_prompt: ?[]const u8 = null,
     /// Max tool-call iterations before forced stop. 0 = unlimited (pi-mono style).
@@ -208,8 +227,8 @@ pub const AgentLoop = struct {
                     ) });
 
                     // Substitute secret placeholders in args
-                    const resolved_args = if (self.config.substitute_fn) |sub|
-                        sub(allocator, call.function.arguments)
+                    const resolved_args = if (self.config.secret_filter) |sf|
+                        sf.substitute(allocator, call.function.arguments)
                     else
                         call.function.arguments;
 
@@ -222,8 +241,8 @@ pub const AgentLoop = struct {
 
                     // Mask secret values in output
                     const raw_output = if (result.success) result.output else result.error_msg orelse "Tool execution failed";
-                    const output = if (self.config.mask_fn) |m|
-                        m(allocator, raw_output)
+                    const output = if (self.config.secret_filter) |sf|
+                        sf.mask(allocator, raw_output)
                     else
                         raw_output;
 

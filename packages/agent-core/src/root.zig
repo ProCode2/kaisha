@@ -26,6 +26,7 @@ pub const StopReason = provider.StopReason;
 pub const http = @import("http.zig");
 pub const HttpClient = http.HttpClient;
 pub const Header = http.Header;
+pub const ZigHttpClient = @import("http_zig.zig").ZigHttpClient;
 
 pub const storage = @import("storage.zig");
 pub const Storage = storage.Storage;
@@ -33,6 +34,7 @@ pub const Storage = storage.Storage;
 pub const loop = @import("loop.zig");
 pub const AgentLoop = loop.AgentLoop;
 pub const LoopConfig = loop.LoopConfig;
+pub const SecretFilter = loop.SecretFilter;
 
 pub const path = @import("path.zig");
 
