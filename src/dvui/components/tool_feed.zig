@@ -73,7 +73,7 @@ pub const ToolFeed = struct {
 
         var container = dvui.box(@src(), .{}, .{
             .expand = .horizontal,
-            .max_size_content = .{ .h = 400 },
+            .max_size_content = .height(400),
             .background = true,
             .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
             .margin = .{ .y = 4 },

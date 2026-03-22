@@ -1,6 +1,8 @@
 const std = @import("std");
 const dvui = @import("dvui");
 
+const emoji_font = dvui.Font.find(.{ .family = "Noto Emoji" });
+
 /// Render markdown-formatted text into a DVUI textLayout.
 /// Supports: headings (#), bold (**), italic (*), inline code (`),
 /// code blocks (```), unordered lists (- *), ordered lists (1.),

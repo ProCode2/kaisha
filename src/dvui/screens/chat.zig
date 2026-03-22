@@ -101,18 +101,19 @@ pub fn frame() bool {
                 }, .{ .expand = .horizontal });
                 const enter = te.enter_pressed;
                 const text = te.getText();
-                // Dupe before deinit since getText returns internal buffer
                 var send_buf: [4096]u8 = undefined;
                 const send_len = @min(text.len, send_buf.len);
                 @memcpy(send_buf[0..send_len], text[0..send_len]);
-                te.deinit();
 
                 const label = if (app.is_busy) "Steer" else "Send";
                 const clicked = dvui.button(@src(), label, .{}, .{});
 
                 if ((clicked or enter) and send_len > 0) {
                     sendMessage(send_buf[0..send_len]);
+                    te.setLen(0); // clear input after send
                 }
+
+                te.deinit();
             }
         }
 
