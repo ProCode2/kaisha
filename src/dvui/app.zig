@@ -17,8 +17,10 @@ pub var gpa: std.mem.Allocator = undefined;
 pub var screen: Screen = .box_list;
 pub var box_manager: BoxManager = undefined;
 pub var active_box: ?Box = null;
+pub var active_box_name: []const u8 = "";
 pub var messages: std.ArrayListUnmanaged(Message) = .empty;
 pub var secrets_panel: SecretsPanel = .{};
+var box_secrets: std.StringHashMapUnmanaged(SecretsPanel) = .empty;
 pub var is_busy: bool = false;
 pub var status_text: [128]u8 = std.mem.zeroes([128]u8);
 pub var status_len: usize = 0;
@@ -49,7 +51,17 @@ pub fn deinit() void {
 pub fn openBox(name: []const u8) void {
     if (box_manager.get(name)) |b| {
         std.debug.print("[App] Opening box '{s}'\n", .{name});
+
+        // Save current box's secrets
+        if (active_box_name.len > 0) {
+            box_secrets.put(gpa, active_box_name, secrets_panel) catch {};
+        }
+
         active_box = b;
+        active_box_name = gpa.dupe(u8, name) catch name;
+
+        // Load this box's secrets (or fresh panel)
+        secrets_panel = box_secrets.get(name) orelse SecretsPanel{};
 
         // Clear old messages
         for (messages.items) |m| {
