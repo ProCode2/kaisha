@@ -24,6 +24,8 @@ pub const diff_view = @import("components/diff_view.zig");
 pub const MdRenderer = @import("components/md/renderer.zig");
 
 pub const MaskedInput = @import("components/masked_input.zig").MaskedInput;
+pub const SelectableText = @import("components/selectable_text.zig").SelectableText;
+pub const markdown_sel = @import("components/markdown_sel.zig");
 pub const KeyValueList = @import("components/key_value_list.zig").KeyValueList;
 
 // Util

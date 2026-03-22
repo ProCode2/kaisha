@@ -360,6 +360,8 @@ fn fillArgsSummary(entry: *FeedEntry, args: []const u8) void {
         "file_path"
     else if (std.mem.eql(u8, name, "glob"))
         "pattern"
+    else if (std.mem.eql(u8, name, "secrets"))
+        "action"
     else
         "";
 

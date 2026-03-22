@@ -318,47 +318,40 @@ pub fn drawLegacy(self: *ChatScreen, ctx: *const FrameContext) void {
         }
     }
 
-    // Render markdown on top of Clay text placeholders
-    for (self.messages.items, 0..) |m, i| {
-        if (m.content) |content| {
-            const msg_data = clay.getElementData(clay.ElementId.IDI("msg", @intCast(i)));
-            if (msg_data.found) {
-                const bb = msg_data.bounding_box;
+    // Render ALL messages in one SelectableText — enables cross-message selection
+    const SelectableText = sukue.SelectableText;
+    const msgs_data = clay.getElementData(clay.ElementId.ID("messages"));
+    if (msgs_data.found and self.messages.items.len > 0) {
+        const bb = msgs_data.bounding_box;
+        // Get scroll offset to position text correctly within scrolled container
+        const scroll_data = clay.getScrollContainerData(clay.ElementId.ID("messages"));
+        const scroll_y: f32 = if (scroll_data.found) scroll_data.scroll_position.y else 0;
+
+        var st = SelectableText.begin(
+            0xFFFF, // single widget for all messages
+            bb.x + 10,
+            bb.y + 10 + scroll_y,
+            bb.width - 20,
+            theme,
+            theme.text_primary,
+        );
+
+        for (self.messages.items) |m| {
+            if (m.content) |content| {
                 const is_user = m.role == .user;
                 const color = if (is_user) theme.user_color else theme.assistant_color;
-                const md = MdRenderer{
-                    .allocator = self.allocator,
-                    .txt = content,
-                    .x = @intFromFloat(bb.x + 10),
-                    .y = @intFromFloat(bb.y + 4),
-                    .font_size = theme.font_body,
-                    .max_width = @intFromFloat(bb.width - 20),
-                    .color = color,
-                    .theme = theme,
-                };
-                _ = md.draw();
-            }
-        }
-    }
-
-    // Click to copy on message bubbles
-    if (c.IsMouseButtonPressed(c.MOUSE_BUTTON_LEFT)) {
-        for (self.messages.items, 0..) |m, i| {
-            if (m.content) |content| {
-                if (content.len > 0 and clay.pointerOver(clay.ElementId.IDI("msg", @intCast(i)))) {
-                    var buf = self.allocator.alloc(u8, content.len + 1) catch break;
-                    defer self.allocator.free(buf);
-                    @memcpy(buf[0..content.len], content);
-                    buf[content.len] = 0;
-                    c.SetClipboardText(@ptrCast(buf.ptr));
-                    ChatBubble.triggerToast(c.GetMouseX(), c.GetMouseY() - 20);
-                    break;
+                st.default_color = color;
+                if (is_user) {
+                    st.addText(content);
+                } else {
+                    sukue.markdown_sel.render(&st, content);
                 }
+                st.paragraph();
             }
         }
-    }
 
-    ChatBubble.drawToast(theme);
+        _ = st.end();
+    }
 }
 
 fn estimateMarkdownHeight(content: []const u8, font_size: c_int) f32 {
