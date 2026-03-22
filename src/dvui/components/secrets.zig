@@ -30,6 +30,7 @@ pub const SecretsPanel = struct {
         var panel = dvui.box(@src(), .{}, .{
             .min_size_content = .{ .w = 280 },
             .expand = .vertical,
+            .gravity_x = 1.0,
             .background = true,
             .padding = .{ .x = 12, .y = 12, .w = 12, .h = 12 },
         });

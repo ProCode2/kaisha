@@ -65,7 +65,7 @@ pub fn openBox(name: []const u8) void {
             messages.append(gpa, m) catch {};
         }
         std.debug.print("[App] Loaded {d} history messages\n", .{history.len});
-        if (history.len > 0) chat.scroll_to_bottom = true;
+        if (history.len > 0) chat.scroll_to_bottom_frames = 10;
 
         screen = .chat;
     }
