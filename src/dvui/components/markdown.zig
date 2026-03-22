@@ -1,8 +1,6 @@
 const std = @import("std");
 const dvui = @import("dvui");
 
-const emoji_font = dvui.Font.find(.{ .family = "Noto Emoji" });
-
 /// Render markdown-formatted text into a DVUI textLayout.
 /// Supports: headings (#), bold (**), italic (*), inline code (`),
 /// code blocks (```), unordered lists (- *), ordered lists (1.),
@@ -244,46 +242,27 @@ fn parseOrderedListPrefix(line: []const u8) ?[]const u8 {
     return null;
 }
 
-/// Add text with automatic emoji font fallback.
-/// Splits text into runs of normal text and emoji, rendering each with the appropriate font.
+/// Add text with emoji stripped (4-byte UTF-8 sequences removed).
 fn addTextWithEmoji(tl: *dvui.TextLayoutWidget, text: []const u8, opts: dvui.Options) void {
     var i: usize = 0;
     var seg_start: usize = 0;
 
     while (i < text.len) {
-        const b = text[i];
-        if (b >= 0xF0 and i + 3 < text.len) {
+        if (text[i] >= 0xF0 and i + 3 < text.len) {
             // Flush preceding normal text
-            if (i > seg_start) {
-                tl.addText(text[seg_start..i], opts);
-            }
-            // Find end of emoji run (4-byte sequences + variation selectors)
-            const emoji_start = i;
-            while (i < text.len and text[i] >= 0xF0 and i + 3 < text.len) {
-                i += 4;
-                // Skip variation selectors (U+FE0F = 0xEF 0xB8 0x8F)
-                while (i + 2 < text.len and text[i] == 0xEF and text[i + 1] == 0xB8 and text[i + 2] == 0x8F) {
-                    i += 3;
-                }
-                // Skip zero-width joiners (U+200D = 0xE2 0x80 0x8D)
-                if (i + 2 < text.len and text[i] == 0xE2 and text[i + 1] == 0x80 and text[i + 2] == 0x8D) {
-                    i += 3;
-                }
-            }
-            // Render emoji with emoji font
-            tl.addText(text[emoji_start..i], dvui.Options{
-                .font = emoji_font,
-                .color_text = opts.color_text,
-            });
+            if (i > seg_start) tl.addText(text[seg_start..i], opts);
+            // Skip 4-byte sequence
+            i += 4;
+            // Skip variation selectors (U+FE0F = 0xEF 0xB8 0x8F)
+            while (i + 2 < text.len and text[i] == 0xEF and text[i + 1] == 0xB8 and text[i + 2] == 0x8F) i += 3;
+            // Skip zero-width joiners (U+200D = 0xE2 0x80 0x8D)
+            if (i + 2 < text.len and text[i] == 0xE2 and text[i + 1] == 0x80 and text[i + 2] == 0x8D) i += 3;
             seg_start = i;
         } else {
             i += 1;
         }
     }
-    // Flush remaining normal text
-    if (seg_start < text.len) {
-        tl.addText(text[seg_start..], opts);
-    }
+    if (seg_start < text.len) tl.addText(text[seg_start..], opts);
 }
 
 fn isHorizontalRule(line: []const u8) bool {

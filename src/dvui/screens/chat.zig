@@ -57,7 +57,7 @@ pub fn frame() bool {
             var chat_col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
             defer chat_col.deinit();
 
-            // Messages
+            // Messages — grows to fill available space
             {
                 var scroll = dvui.scrollArea(@src(), .{
                     .scroll_info = &msg_scroll_info,
@@ -73,7 +73,6 @@ pub fn frame() bool {
                     }
                 }
 
-                // Auto scroll to bottom
                 if (scroll_to_bottom) {
                     scroll_to_bottom = false;
                     msg_scroll_info.scrollToFraction(.vertical, 1.0);
@@ -86,15 +85,16 @@ pub fn frame() bool {
                 handlePermission(perm);
             }
 
-            // Input bar
+            // Input bar — fixed at bottom, never squeezed
             {
                 var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .expand = .horizontal,
-                    .min_size_content = .{ .h = 30 },
+                    .gravity_y = 1.0, // pin to bottom
                     .padding = .{ .x = 10, .y = 4, .w = 10, .h = 10 },
                 });
                 defer hbox.deinit();
 
+                // Text entry — takes remaining width
                 var te = dvui.textEntry(@src(), .{
                     .text = .{ .internal = .{ .limit = 4096 } },
                     .placeholder = "Type a message...",
@@ -104,13 +104,15 @@ pub fn frame() bool {
                 var send_buf: [4096]u8 = undefined;
                 const send_len = @min(text.len, send_buf.len);
                 @memcpy(send_buf[0..send_len], text[0..send_len]);
-
+                // Send button — fixed width, after text entry
                 const label = if (app.is_busy) "Steer" else "Send";
-                const clicked = dvui.button(@src(), label, .{}, .{});
+                const clicked = dvui.button(@src(), label, .{}, .{
+                    .min_size_content = .{ .w = 50, .h = 20 },
+                });
 
                 if ((clicked or enter) and send_len > 0) {
                     sendMessage(send_buf[0..send_len]);
-                    te.setLen(0); // clear input after send
+                    te.setLen(0);
                 }
 
                 te.deinit();
